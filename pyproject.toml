@@ -33,4 +33,10 @@ dependencies = [
 ]
 
 [[tool.uv.index]]
+name = "paddle"
 url = "https://www.paddlepaddle.org.cn/packages/stable/cu124/"
+explicit = true
+
+[tool.uv.sources]
+paddlepaddle-gpu = { index = "paddle" }
+paddle2onnx = { index = "paddle" }
