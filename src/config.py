@@ -49,26 +49,38 @@ if 'infer_model.pth' not in os.listdir(os.path.dirname(STTN_MODEL_PATH)):
 # Specify ffmpeg executable path
 sys_str = platform.system()
 if sys_str == "Windows":
-    ffmpeg_bin = os.path.join('win_x64', 'ffmpeg.exe')
+  ffmpeg_bin = os.path.join('win_x64', 'ffmpeg.exe')
 elif sys_str == "Linux":
-    ffmpeg_bin = os.path.join('linux_x64', 'ffmpeg')
+  ffmpeg_bin = os.path.join('linux_x64', 'ffmpeg')
 else:
-    ffmpeg_bin = os.path.join('macos', 'ffmpeg')
-FFMPEG_PATH = os.path.join(BASE_DIR, '', 'ffmpeg', ffmpeg_bin)
+  ffmpeg_bin = os.path.join('macos', 'ffmpeg')
+_bundled_ffmpeg = os.path.join(BASE_DIR, '', 'ffmpeg', ffmpeg_bin)
 
-if 'ffmpeg.exe' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64')):
-    fs = Filesplit()
-    fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64'))
+if sys_str == "Windows" and 'ffmpeg.exe' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64')):
+  fs = Filesplit()
+  fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64'))
 
-if 'ffmpeg' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'linux_x64')):
-    fs = Filesplit()
-    fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'linux_x64'))
+if sys_str == "Linux" and 'ffmpeg' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'linux_x64')):
+  fs = Filesplit()
+  fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'linux_x64'))
 
-if 'ffmpeg' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'macos')):
-    fs = Filesplit()
-    fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'macos'))
-# Add execute permission to ffmpeg
-os.chmod(FFMPEG_PATH, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
+if sys_str == "Darwin" and 'ffmpeg' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'macos')):
+  fs = Filesplit()
+  fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'macos'))
+
+# Make bundled binary executable if it exists, then fall back to system ffmpeg
+import shutil as _shutil
+if os.path.isfile(_bundled_ffmpeg):
+  os.chmod(_bundled_ffmpeg, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
+  FFMPEG_PATH = _bundled_ffmpeg
+else:
+  _system_ffmpeg = _shutil.which('ffmpeg')
+  if _system_ffmpeg:
+    FFMPEG_PATH = _system_ffmpeg
+    print(f'[Info] Bundled ffmpeg not found, using system ffmpeg: {FFMPEG_PATH}')
+  else:
+    FFMPEG_PATH = _bundled_ffmpeg  # Let it fail loudly later
+    print('[Warning] ffmpeg not found — audio merging will be unavailable.')
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 # Use ONNX (DirectML/AMD/Intel)?

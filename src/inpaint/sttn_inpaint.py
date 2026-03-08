@@ -278,6 +278,8 @@ class STTNVideoInpaint:
                 
             # Get inpaint area positions
             inpaint_area = self.sttn_inpaint.get_inpaint_area_by_mask(frame_info['H_ori'], split_h, mask)
+            if not inpaint_area:
+                print('[Warning] Mask produced no inpaint areas — check that the mask covers the subtitle region. Frames will be written unchanged.')
             
             # Iterate through each segment
             for i in range(rec_time):
@@ -349,9 +351,11 @@ class STTNVideoInpaint:
                                 input_sub_remover.preview_frame = cv2.hconcat([original_frame, frame])
         except Exception as e:
             print(f"Error during video processing: {str(e)}")
-            # Do not raise exception, allow program to continue
+            import traceback
+            traceback.print_exc()
         finally:
-            if writer:
+            # Only release the writer if WE created it (not borrowed from sub_remover)
+            if writer and input_sub_remover is None:
                 writer.release()
 
 

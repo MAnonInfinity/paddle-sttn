@@ -27,7 +27,7 @@ import time
 from tqdm import tqdm
 
 # --- CONFIGURATION ---
-VIDEO_PATH = "videos/2.mp4"
+VIDEO_PATH = "videos/5.mp4"
 OUTPUT_VIDEO = "output.mp4"
 # ---------------------
 
@@ -55,6 +55,10 @@ class SubtitleDetect:
             lang='ch',
             use_gpu=torch.cuda.is_available(),
             show_log=False,
+            # Lower thresholds for subtitle detection — defaults (0.3/0.6) are tuned
+            # for document OCR and miss many subtitle frames in video
+            det_db_thresh=0.2,
+            det_db_box_thresh=0.4,
         )
         # Return a callable that returns (dt_boxes, elapse) like the old API
         def _detect(img):
@@ -139,11 +143,11 @@ class SubtitleDetect:
         #         except Exception:
         #             pass
         #     subtitle_frame_no_box_dict = self.prevent_missed_detection(subtitle_frame_no_box_dict)
-        print('[Finished] Finished finding subtitles...')
         new_subtitle_frame_no_box_dict = dict()
         for key in subtitle_frame_no_box_dict.keys():
             if len(subtitle_frame_no_box_dict[key]) > 0:
                 new_subtitle_frame_no_box_dict[key] = subtitle_frame_no_box_dict[key]
+        print(f'[Finished] Finished finding subtitles. Detected in {len(new_subtitle_frame_no_box_dict)}/{int(frame_count)} frames.')
         return new_subtitle_frame_no_box_dict
 
     def convertToOnnxModelIfNeeded(self, model_dir, model_filename="inference.pdmodel", params_filename="inference.pdiparams", opset_version=14):
@@ -803,13 +807,21 @@ class SubtitleRemover:
             sttn_inpaint = STTNInpaint()
             sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
             if not sub_list:
-                print('[Info] No subtitles detected. Falling back to full-frame STTN mode.')
-                self.sttn_mode_with_no_detection(tbar)
+                if self.sub_area is not None:
+                    print('[Info] No subtitles detected by OCR. Processing configured sub_area anyway.')
+                    self.sttn_mode_with_no_detection(tbar)
+                else:
+                    print('[Warning] No subtitles detected and no sub_area is configured.')
+                    print('[Warning] Set sub_area in the script or configure STTN_SKIP_DETECTION=True to force-process a region.')
+                    print('[Warning] Output video will be a copy of the input (no processing done).')
                 return
             continuous_frame_no_list = self.sub_detector.find_continuous_ranges_with_same_mask(sub_list)
-            print(continuous_frame_no_list)
+            print(f'[Detection] Found {len(sub_list)} subtitle frames in {len(continuous_frame_no_list)} intervals.')
+            # Expand intervals to cover neighboring frames that OCR may have missed
+            # (subtitles persist across time, so detected frames anchor the regions)
+            continuous_frame_no_list = self.sub_detector.expand_and_merge_intervals(continuous_frame_no_list)
             continuous_frame_no_list = self.sub_detector.filter_and_merge_intervals(continuous_frame_no_list)
-            print(continuous_frame_no_list)
+            print(f'[Detection] After expansion: {len(continuous_frame_no_list)} intervals covering {sum(e - s + 1 for s, e in continuous_frame_no_list)} frames.')
             start_end_map = dict()
             for interval in continuous_frame_no_list:
                 start, end = interval
@@ -901,8 +913,9 @@ class SubtitleRemover:
             self.progress_total = 50 + self.progress_remover
 
     def run(self):
-        # Record start time
         start_time = time.time()
+        start_dt = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))
+        print(f'[Started]  {start_dt}')
         # Reset progress bar
         self.progress_total = 0
         tbar = tqdm(total=int(self.frame_count), unit='frame', position=0, file=sys.__stdout__,
@@ -937,7 +950,12 @@ class SubtitleRemover:
             print(f"[Finished]Subtitle successfully removed, video generated at：{self.video_out_name}")
         else:
             print(f"[Finished]Subtitle successfully removed, picture generated at：{self.video_out_name}")
-        print(f'time cost: {round(time.time() - start_time, 2)}s')
+        end_time = time.time()
+        end_dt = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_time))
+        elapsed = int(end_time - start_time)
+        elapsed_str = f'{elapsed // 3600:02d}h {(elapsed % 3600) // 60:02d}m {elapsed % 60:02d}s'
+        print(f'[Finished] {end_dt}')
+        print(f'[Elapsed]  {elapsed_str}  ({elapsed}s total)')
         self.isFinished = True
         self.progress_total = 100
         if os.path.exists(self.video_temp_file.name):
