@@ -32,13 +32,5 @@ dependencies = [
     "nvidia-nccl-cu12",
 ]
 
-[[tool.uv.index]]
-name = "paddle"
-url = "https://www.paddlepaddle.org.cn/packages/stable/cu124/"
-explicit = true
-
-[tool.uv.sources]
-paddlepaddle-gpu = { index = "paddle" }
-
 [tool.uv]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
