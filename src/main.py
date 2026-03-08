@@ -51,9 +51,11 @@ class SubtitleDetect:
         importlib.reload(config)
         args = utility.parse_args()
         args.det_algorithm = 'DB'
-        args.det_model_dir = self.convertToOnnxModelIfNeeded(config.DET_MODEL_PATH)
-        args.use_onnx = len(config.ONNX_PROVIDERS) > 0
-        args.onnx_providers = config.ONNX_PROVIDERS
+        # Do not set det_model_dir — let PaddleOCR auto-download a model
+        # compatible with the installed Paddle/cuDNN (the local model uses
+        # fused_conv2d_add_act exported with an old cuDNN that Colab doesn't support)
+        args.use_gpu = torch.cuda.is_available()
+        args.use_onnx = False
         return TextDetector(args)
 
     def detect_subtitle(self, img):
