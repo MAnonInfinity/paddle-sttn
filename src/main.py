@@ -968,47 +968,45 @@ class SubtitleRemover:
                     print(f'failed to delete temp file {self.video_temp_file.name}')
 
     def merge_audio_to_video(self):
-        # Create audio temporary object
-        temp = tempfile.NamedTemporaryFile(suffix='.aac', delete=False)
-        audio_extract_command = [config.FFMPEG_PATH,
-                                 "-y", "-i", self.video_path,
-                                 "-acodec", "copy",
-                                 "-vn", "-loglevel", "error", temp.name]
-        use_shell = True if os.name == "nt" else False
-        try:
-            subprocess.check_output(audio_extract_command, stdin=open(os.devnull), shell=use_shell)
-        except Exception:
-            print('fail to extract audio')
+        if not os.path.exists(self.video_temp_file.name):
+            print(f'[Error] Processed video not found at temp path: {self.video_temp_file.name}')
             return
-        else:
-            if os.path.exists(self.video_temp_file.name):
-                audio_merge_command = [config.FFMPEG_PATH,
-                                       "-y", "-i", self.video_temp_file.name,
-                                       "-i", temp.name,
-                                       "-vcodec", "libx264" if config.USE_H264 else "copy",
-                                       "-acodec", "copy",
-                                       "-loglevel", "error", self.video_out_name]
-                try:
-                    subprocess.check_output(audio_merge_command, stdin=open(os.devnull), shell=use_shell)
-                except Exception:
-                    print('fail to merge audio')
-                    return
-            if os.path.exists(temp.name):
-                try:
-                    os.remove(temp.name)
-                except Exception:
-                    if platform.system() in ['Windows']:
-                        pass
-                    else:
-                        print(f'failed to delete temp file {temp.name}')
-            self.is_successful_merged = True
+
+        # Single-pass merge: take video stream from processed file, audio from original.
+        # -map 1:a? = audio from original is optional (handles videos with no audio track).
+        # -c:a aac  = re-encode audio to AAC (works for any input codec: mp3, ac3, pcm...).
+        # -c:v copy = keep processed video as-is (no re-encoding overhead) UNLESS h264 needed.
+        use_shell = True if os.name == 'nt' else False
+        cmd = [
+            config.FFMPEG_PATH, '-y',
+            '-i', self.video_temp_file.name,  # processed video (no audio)
+            '-i', self.video_path,             # original video (audio source)
+            '-map', '0:v:0',                   # video from processed
+            '-map', '1:a?',                    # audio from original (optional)
+            '-c:v', 'libx264' if config.USE_H264 else 'copy',
+            '-c:a', 'aac',
+            '-loglevel', 'warning',
+            self.video_out_name,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True,
+                                    stdin=open(os.devnull), shell=use_shell)
+            if result.returncode != 0:
+                print(f'[Warning] ffmpeg audio merge failed (exit {result.returncode}):')
+                print(result.stderr[:800])
+                shutil.copy2(self.video_temp_file.name, self.video_out_name)
+            else:
+                if result.stderr.strip():
+                    print(f'[ffmpeg] {result.stderr.strip()[:400]}')
+                self.is_successful_merged = True
+                print('[Info] Audio merged successfully.')
+        except Exception as e:
+            print(f'[Error] Could not run ffmpeg: {e}')
+            try:
+                shutil.copy2(self.video_temp_file.name, self.video_out_name)
+            except IOError as ie:
+                print(f'[Error] Unable to copy processed video: {ie}')
         finally:
-            temp.close()
-            if not self.is_successful_merged:
-                try:
-                    shutil.copy2(self.video_temp_file.name, self.video_out_name)
-                except IOError as e:
-                    print("Unable to copy file. %s" % e)
             self.video_temp_file.close()
 
 
