@@ -1,5 +1,8 @@
+import matplotlib
+matplotlib.use('agg')
 import matplotlib.patches as patches
 from matplotlib.path import Path
+from matplotlib import pyplot as plt
 import io
 import cv2
 import random
@@ -8,11 +11,6 @@ import numpy as np
 from PIL import Image, ImageOps
 
 import torch
-
-import matplotlib
-from matplotlib import pyplot as plt
-matplotlib.use('agg')
-
 
 class ZipReader(object):
     file_dict = dict()
