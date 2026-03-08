@@ -47,7 +47,7 @@ class SubtitleDetect:
         paddle.disable_signal_handler()
         from paddleocr import TextDetection
         importlib.reload(config)
-        return TextDetection(model_dir=config.DET_MODEL_PATH)
+        return TextDetection(model_name="PP-OCRv4_server_det")
 
     def detect_subtitle(self, img):
         results = self.text_detector.predict(img)
