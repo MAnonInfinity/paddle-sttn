@@ -42,6 +42,10 @@ if 'ProPainter.pth' not in os.listdir(VIDEO_INPAINT_MODEL_PATH):
     fs = Filesplit()
     fs.merge(input_dir=VIDEO_INPAINT_MODEL_PATH)
 
+if 'infer_model.pth' not in os.listdir(os.path.dirname(STTN_MODEL_PATH)):
+    fs = Filesplit()
+    fs.merge(input_dir=os.path.dirname(STTN_MODEL_PATH))
+
 # Specify ffmpeg executable path
 sys_str = platform.system()
 if sys_str == "Windows":
@@ -55,6 +59,14 @@ FFMPEG_PATH = os.path.join(BASE_DIR, '', 'ffmpeg', ffmpeg_bin)
 if 'ffmpeg.exe' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64')):
     fs = Filesplit()
     fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64'))
+
+if 'ffmpeg' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'linux_x64')):
+    fs = Filesplit()
+    fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'linux_x64'))
+
+if 'ffmpeg' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'macos')):
+    fs = Filesplit()
+    fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'macos'))
 # Add execute permission to ffmpeg
 os.chmod(FFMPEG_PATH, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'

@@ -371,6 +371,9 @@ test*_no_sub*.mp4
 /local_test/
 /src/models/video/ProPainter.pth
 /src/models/big-lama/big-lama.pt
+/src/models/sttn/infer_model.pth
+/src/ffmpeg/linux_x64/ffmpeg
+/src/ffmpeg/macos/ffmpeg
 /test/debug/
 /src/tools/train/release_model/
 model.onnx
