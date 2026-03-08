@@ -43,4 +43,4 @@ paddle2onnx = { index = "paddle" }
 paddleocr = { index = "paddle" }
 
 [tool.uv]
-environments = ["sys_platform == 'linux'"]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
