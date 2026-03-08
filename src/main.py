@@ -45,18 +45,20 @@ class SubtitleDetect:
     def text_detector(self):
         import paddle
         paddle.disable_signal_handler()
-        from paddleocr import TextDetection
+        from paddleocr.tools.infer import utility
+        from paddleocr.tools.infer.predict_det import TextDetector
+        # Get parameter object
         importlib.reload(config)
-        return TextDetection(model_name="PP-OCRv4_server_det")
+        args = utility.parse_args()
+        args.det_algorithm = 'DB'
+        args.det_model_dir = self.convertToOnnxModelIfNeeded(config.DET_MODEL_PATH)
+        args.use_onnx = len(config.ONNX_PROVIDERS) > 0
+        args.onnx_providers = config.ONNX_PROVIDERS
+        return TextDetector(args)
 
     def detect_subtitle(self, img):
-        results = self.text_detector.predict(img)
-        if not results or "dt_polys" not in results[0]:
-            import numpy as np
-            return np.array([]), 0.0
-        import numpy as np
-        dt_boxes = np.array(results[0]["dt_polys"])
-        return dt_boxes, 0.0
+        dt_boxes, elapse = self.text_detector(img)
+        return dt_boxes, elapse
 
     @staticmethod
     def get_coordinates(dt_box):
