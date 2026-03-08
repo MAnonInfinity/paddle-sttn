@@ -87,7 +87,10 @@ class STTNInpaint:
                     frame[inpaint_area[k][0]:inpaint_area[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[inpaint_area[k][0]:inpaint_area[k][1], :, :]
                 # Add final frame to list
                 inpainted_frames.append(frame)
-                print(f'processing frame, {len(frames_hr) - j} left')
+        else:
+            # If no inpaint areas found, pass frames through unchanged
+            inpainted_frames = copy.deepcopy(input_frames)
+            
         return inpainted_frames
 
     @staticmethod

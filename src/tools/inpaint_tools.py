@@ -87,7 +87,7 @@ def create_mask(size, coords_list):
             x2 = xmax + config.SUBTITLE_AREA_DEVIATION_PIXEL
             y2 = ymax + config.SUBTITLE_AREA_DEVIATION_PIXEL
             cv2.rectangle(mask, (x1, y1),
-                          (x2, y2), (255, 255, 255), thickness=-1)
+                          (x2, y2), 255, thickness=-1)
     return mask
 
 

@@ -159,7 +159,17 @@ class SubtitleDetect:
         for key in subtitle_frame_no_box_dict.keys():
             if len(subtitle_frame_no_box_dict[key]) > 0:
                 new_subtitle_frame_no_box_dict[key] = subtitle_frame_no_box_dict[key]
-        print(f'[Finished] Finished finding subtitles. Detected in {len(new_subtitle_frame_no_box_dict)}/{int(frame_count)} frames.')
+        detected_count = len(new_subtitle_frame_no_box_dict)
+        print(f'[Finished] Finished finding subtitles. Detected in {detected_count}/{int(frame_count)} frames.')
+        if detected_count == 0:
+            print('[Hint] OCR found NO text. Try: OCR_LANG="en", or set STTN_SKIP_DETECTION=True + SUB_AREA=(ymin,ymax,xmin,xmax).')
+        else:
+            # Print first 3 detected frames so user can see what coordinates were found
+            for i, (fn, boxes) in enumerate(list(new_subtitle_frame_no_box_dict.items())[:3]):
+                print(f'  [Sample frame {fn}]:')
+                for box in boxes:
+                    print(f'    -> {box}')
+
         return new_subtitle_frame_no_box_dict
 
     def convertToOnnxModelIfNeeded(self, model_dir, model_filename="inference.pdmodel", params_filename="inference.pdiparams", opset_version=14):
