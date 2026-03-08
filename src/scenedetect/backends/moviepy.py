@@ -29,7 +29,7 @@ from numpy import ndarray
 from scenedetect.frame_timecode import FrameTimecode
 from scenedetect.platform import get_file_name
 from scenedetect.video_stream import VideoStream, SeekError, VideoOpenFailure
-from scenedetect.srcs.opencv import VideoStreamCv2
+from src.scenedetect.backends.opencv import VideoStreamCv2
 
 logger = getLogger('pyscenedetect')
 

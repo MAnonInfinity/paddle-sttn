@@ -28,7 +28,7 @@ import click
 
 import scenedetect
 from scenedetect.detectors import AdaptiveDetector, ContentDetector, ThresholdDetector
-from scenedetect.srcs import AVAILABLE_BACKENDS
+from src.scenedetect.backends import AVAILABLE_BACKENDS
 from scenedetect.platform import get_system_version_info
 
 from scenedetect._cli.config import CHOICE_MAP, CONFIG_FILE_PATH, CONFIG_MAP

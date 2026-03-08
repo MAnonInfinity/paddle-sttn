@@ -35,8 +35,8 @@ from src.scenedetect.platform import init_logger
 from src.scenedetect.frame_timecode import FrameTimecode
 from src.scenedetect.video_stream import VideoStream, VideoOpenFailure
 from src.scenedetect.scene_detector import SceneDetector
-from src.scenedetect.srcs import (AVAILABLE_BACKENDS, VideoStreamCv2, VideoStreamAv,
-                                  VideoStreamMoviePy, VideoCaptureAdapter)
+from src.scenedetect.backends import (AVAILABLE_BACKENDS, VideoStreamCv2, VideoStreamAv,
+                                      VideoStreamMoviePy, VideoCaptureAdapter)
 from src.scenedetect.stats_manager import StatsManager, StatsFileCorrupt
 from src.scenedetect.scene_manager import SceneManager, save_images
 

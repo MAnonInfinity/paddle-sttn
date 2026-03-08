@@ -30,7 +30,7 @@ import cv2
 from scenedetect.platform import get_file_name
 from scenedetect.frame_timecode import FrameTimecode, MAX_FPS_DELTA
 from scenedetect.video_stream import VideoStream, VideoOpenFailure, FrameRateUnavailable
-from scenedetect.srcs.opencv import _get_aspect_ratio
+from src.scenedetect.backends.opencv import _get_aspect_ratio
 
 ##
 ## VideoManager Exceptions

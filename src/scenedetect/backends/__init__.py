@@ -87,15 +87,15 @@ examples for details.
 from typing import Dict, Type
 
 # OpenCV must be available at minimum.
-from src.scenedetect.srcs.opencv import VideoStreamCv2, VideoCaptureAdapter
+from src.scenedetect.backends.opencv import VideoStreamCv2, VideoCaptureAdapter
 
 try:
-    from scenedetect.srcs.pyav import VideoStreamAv
+    from src.scenedetect.backends.pyav import VideoStreamAv
 except ImportError:
     VideoStreamAv = None
 
 try:
-    from scenedetect.srcs.moviepy import VideoStreamMoviePy
+    from src.scenedetect.backends.moviepy import VideoStreamMoviePy
 except ImportError:
     VideoStreamMoviePy = None
 
