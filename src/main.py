@@ -45,18 +45,28 @@ class SubtitleDetect:
     def text_detector(self):
         import paddle
         paddle.disable_signal_handler()
-        from paddleocr.tools.infer import utility
-        from paddleocr.tools.infer.predict_det import TextDetector
-        # Get parameter object
+        from paddleocr import PaddleOCR
         importlib.reload(config)
-        args = utility.parse_args()
-        args.det_algorithm = 'DB'
-        # Do not set det_model_dir — let PaddleOCR auto-download a model
-        # compatible with the installed Paddle/cuDNN (the local model uses
-        # fused_conv2d_add_act exported with an old cuDNN that Colab doesn't support)
-        args.use_gpu = torch.cuda.is_available()
-        args.use_onnx = False
-        return TextDetector(args)
+        # Use the high-level API — it handles model download, GPU, and
+        # language selection correctly without needing the local model dir.
+        # det_only skips recognition to save time.
+        ocr = PaddleOCR(
+            use_angle_cls=False,
+            lang='ch',
+            use_gpu=torch.cuda.is_available(),
+            show_log=False,
+        )
+        # Return a callable that returns (dt_boxes, elapse) like the old API
+        def _detect(img):
+            import time
+            import numpy as np
+            t = time.time()
+            result = ocr.ocr(img, cls=False, rec=False)
+            boxes = result[0] if result and result[0] else []
+            # Convert polygon list → numpy array matching old TextDetector output shape
+            dt_boxes = np.array(boxes, dtype=np.float32) if boxes else np.array([], dtype=np.float32).reshape(0, 4, 2)
+            return dt_boxes, time.time() - t
+        return _detect
 
     def detect_subtitle(self, img):
         dt_boxes, elapse = self.text_detector(img)
@@ -792,6 +802,10 @@ class SubtitleRemover:
             print('use sttn mode')
             sttn_inpaint = STTNInpaint()
             sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
+            if not sub_list:
+                print('[Info] No subtitles detected. Falling back to full-frame STTN mode.')
+                self.sttn_mode_with_no_detection(tbar)
+                return
             continuous_frame_no_list = self.sub_detector.find_continuous_ranges_with_same_mask(sub_list)
             print(continuous_frame_no_list)
             continuous_frame_no_list = self.sub_detector.filter_and_merge_intervals(continuous_frame_no_list)
