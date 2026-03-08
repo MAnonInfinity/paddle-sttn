@@ -1,3 +1,5 @@
+import os
+os.environ.pop('MPLBACKEND', None)
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.patches as patches
