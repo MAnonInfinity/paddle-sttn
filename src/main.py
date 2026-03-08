@@ -29,6 +29,17 @@ from tqdm import tqdm
 # --- CONFIGURATION ---
 VIDEO_PATH = "videos/3.mp4"
 OUTPUT_VIDEO = "output.mp4"
+
+# OCR language for subtitle detection.
+# 'ch'  = Chinese + English (default, works for CJK videos)
+# 'en'  = English-only (use this for videos 1, 2, 8 if they have English subtitles)
+# 'latin' = Latin-script languages (French, Spanish, etc.)
+OCR_LANG = "ch"
+
+# Subtitle area override — set to (ymin, ymax, xmin, xmax) to force-process a region
+# even when OCR detects nothing.  Leave as None for automatic detection.
+# Example for 1920x1080: SUB_AREA = (900, 1060, 80, 1840)
+SUB_AREA = None
 # ---------------------
 
 
@@ -52,7 +63,7 @@ class SubtitleDetect:
         # det_only skips recognition to save time.
         ocr = PaddleOCR(
             use_angle_cls=False,
-            lang='ch',
+            lang=OCR_LANG,
             use_gpu=torch.cuda.is_available(),
             show_log=False,
             # Lower thresholds for subtitle detection — defaults (0.3/0.6) are tuned
@@ -60,6 +71,7 @@ class SubtitleDetect:
             det_db_thresh=0.2,
             det_db_box_thresh=0.4,
         )
+        print(f'[OCR] Using PaddleOCR lang={OCR_LANG!r} with det_db_thresh=0.2, box_thresh=0.4')
         # Return a callable that returns (dt_boxes, elapse) like the old API
         def _detect(img):
             import time
@@ -614,9 +626,11 @@ class SubtitleRemover:
         # Create subtitle detection object
         self.sub_detector = SubtitleDetect(self.video_path, self.sub_area)
         # Create video temporary object
-        self.video_temp_file = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
-        # Create video writer object
-        self.video_writer = cv2.VideoWriter(self.video_temp_file.name, cv2.VideoWriter_fourcc(*'mp4v'), self.fps, self.size)
+        self.video_temp_file = tempfile.NamedTemporaryFile(suffix='.avi', delete=False)
+        # Use XVID codec in AVI container — avoids the OpenCV mp4v malformed-header bug
+        # on Linux that causes ffmpeg to SIGSEGV when reading the temp file.
+        # The final output is still written as .mp4 by the ffmpeg merge step.
+        self.video_writer = cv2.VideoWriter(self.video_temp_file.name, cv2.VideoWriter_fourcc(*'XVID'), self.fps, self.size)
         if video_out_name:
             self.video_out_name = video_out_name
         else:
@@ -1012,9 +1026,9 @@ class SubtitleRemover:
 
 if __name__ == '__main__':
     multiprocessing.set_start_method("spawn")
-    
+
     if is_video_or_image(VIDEO_PATH):
-        sd = SubtitleRemover(VIDEO_PATH, sub_area=None, video_out_name=OUTPUT_VIDEO)
+        sd = SubtitleRemover(VIDEO_PATH, sub_area=SUB_AREA, video_out_name=OUTPUT_VIDEO)
         sd.run()
     else:
         print(f'Invalid video path: {VIDEO_PATH}')
