@@ -87,7 +87,8 @@ for provider in available_providers:
         "OpenVINOExecutionProvider",    # Intel GPU
         "MetalExecutionProvider",       # Apple macOS
         "CoreMLExecutionProvider",      # Apple macOS
-        "CUDAExecutionProvider",        # Nvidia GPU
+        # NOTE: CUDAExecutionProvider intentionally excluded — PaddlePaddle handles
+        # NVIDIA CUDA natively and does NOT need the ONNX conversion path.
     ]:
         continue
     ONNX_PROVIDERS.append(provider)
