@@ -40,3 +40,6 @@ explicit = true
 [tool.uv.sources]
 paddlepaddle-gpu = { index = "paddle" }
 paddle2onnx = { index = "paddle" }
+
+[tool.uv]
+environments = ["sys_platform == 'linux'", "sys_platform == 'win32'"]
