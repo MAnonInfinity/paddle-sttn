@@ -27,7 +27,7 @@ import time
 from tqdm import tqdm
 
 # --- CONFIGURATION ---
-VIDEO_PATH = "videos/8.mp4"
+VIDEO_PATH = "videos/7.mp4"
 OUTPUT_VIDEO = "output.mp4"
 
 # OCR language for subtitle detection.
