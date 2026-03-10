@@ -27,7 +27,7 @@ import time
 from tqdm import tqdm
 
 # --- CONFIGURATION ---
-VIDEO_PATH = "videos/7.mp4"
+VIDEO_PATH = "videos/8.mp4"
 OUTPUT_VIDEO = "output.mp4"
 
 # OCR language for subtitle detection.
@@ -982,6 +982,8 @@ class SubtitleRemover:
         print(f'[Elapsed]  {elapsed_str}  ({elapsed}s total)')
         self.isFinished = True
         self.progress_total = 100
+        # Handle Colab-specific features like auto-download
+        self.handle_colab_features()
         if os.path.exists(self.video_temp_file.name):
             try:
                 os.remove(self.video_temp_file.name)
@@ -990,6 +992,38 @@ class SubtitleRemover:
                     pass
                 else:
                     print(f'failed to delete temp file {self.video_temp_file.name}')
+
+    def handle_colab_features(self):
+        """
+        Handle Google Colab specific features like auto-download.
+        """
+        try:
+            import google.colab
+            is_colab = True
+        except ImportError:
+            is_colab = False
+
+        if not is_colab:
+            return
+
+        # Handle Auto-download
+        if config.AUTO_DOWNLOAD:
+            from google.colab import files
+            import time
+            import shutil
+
+            # timestamp format: minute hour date month year -> %M %H %d %m %Y
+            timestamp_name = time.strftime('%M %H %d %m %Y.mp4')
+            download_path = os.path.join(os.path.dirname(self.video_out_name), timestamp_name)
+
+            print(f"[Colab] Preparing for download: {timestamp_name}")
+            # Ensure the output exists and copy it to the timestamped name for download
+            if os.path.exists(self.video_out_name):
+                shutil.copy2(self.video_out_name, download_path)
+                print(f"[Colab] Triggering download...")
+                files.download(download_path)
+            else:
+                print(f"[Error] Output video not found at {self.video_out_name}")
 
     def merge_audio_to_video(self):
         if not os.path.exists(self.video_temp_file.name):

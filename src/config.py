@@ -166,4 +166,8 @@ PROPAINTER_MAX_LOAD_NUM = 70
 # Whether to enable high-speed mode, does not guarantee inpaint quality
 LAMA_SUPER_FAST = False
 # ********** InpaintMode.LAMA algorithm settings end **********
+# ********** Google Colab Settings start **********
+# Whether to automatically trigger a browser download after processing (Colab only)
+AUTO_DOWNLOAD = True
+# ********** Google Colab Settings end **********
 # ******************** [MODIFIABLE] end ********************
