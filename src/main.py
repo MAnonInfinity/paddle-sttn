@@ -1012,18 +1012,29 @@ class SubtitleRemover:
             import time
             import shutil
 
+            # Resolve to an absolute path so os.path.dirname never returns ""
+            # (which happens when video_out_name is a bare filename like "output.mp4")
+            abs_out = os.path.abspath(self.video_out_name)
+            out_dir = os.path.dirname(abs_out)
+
             # timestamp format: minute hour date month year -> %M %H %d %m %Y
             timestamp_name = time.strftime('%M %H %d %m %Y.mp4')
-            download_path = os.path.join(os.path.dirname(self.video_out_name), timestamp_name)
+            download_path = os.path.join(out_dir, timestamp_name)
 
-            print(f"[Colab] Preparing for download: {timestamp_name}")
-            # Ensure the output exists and copy it to the timestamped name for download
-            if os.path.exists(self.video_out_name):
-                shutil.copy2(self.video_out_name, download_path)
-                print(f"[Colab] Triggering download...")
+            print(f"[Colab] Output video path: {abs_out}")
+            print(f"[Colab] Preparing download as: {timestamp_name}")
+
+            if os.path.exists(abs_out):
+                shutil.copy2(abs_out, download_path)
+                print(f"[Colab] Copied to: {download_path}")
+                # Small pause so Colab's output stream can flush before the
+                # JS download bridge is invoked — without this the browser
+                # download notification sometimes never appears.
+                time.sleep(1)
+                print(f"[Colab] Triggering browser download...")
                 files.download(download_path)
             else:
-                print(f"[Error] Output video not found at {self.video_out_name}")
+                print(f"[Error] Output video not found at {abs_out}")
 
     def merge_audio_to_video(self):
         if not os.path.exists(self.video_temp_file.name):
