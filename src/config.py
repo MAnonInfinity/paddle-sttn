@@ -134,7 +134,7 @@ MODE = InpaintMode.STTN
 # Used to determine if it is a non-subtitle area (generally subtitle text boxes are wider than they are high)
 THRESHOLD_HEIGHT_WIDTH_DIFFERENCE = 50
 # Used to expand mask size, prevents text borders or residue in inpaint stage
-SUBTITLE_AREA_DEVIATION_PIXEL = 25  # Increased for cleaner coverage
+SUBTITLE_AREA_DEVIATION_PIXEL = 10
 # Used to determine if two text boxes are on the same line (within specified vertical pixel difference)
 THRESHOLD_HEIGHT_DIFFERENCE = 20
 # Used to determine if two subtitle text boxes are similar (within specified X/Y axis threshold)

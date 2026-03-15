@@ -79,7 +79,8 @@ class STTNInpaint:
                 frame = frames_hr[j]  # Get original frame
                 # For each segment in the pattern
                 for k in range(len(inpaint_area)):
-                    comp = cv2.resize(comps[k][j], (W_ori, split_h))  # Resize completed frame back to original size
+                    custom_h = inpaint_area[k][1] - inpaint_area[k][0]
+                    comp = cv2.resize(comps[k][j], (W_ori, custom_h))  # Resize completed frame back to original size
                     comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)  # Convert color space
                     # Get mask area and perform image composition
                     mask_area = mask[inpaint_area[k][0]:inpaint_area[k][1], :]  # Get mask area
@@ -168,41 +169,36 @@ class STTNInpaint:
 
     @staticmethod
     def get_inpaint_area_by_mask(H, h, mask):
-        """
-        Get subtitle removal area, determine region and height based on mask
-        """
-        # List to store painting areas
         inpaint_area = []
-        # Start from subtitle position at video bottom, assuming typical bottom placement
-        to_H = from_H = H
-        # Traverse mask from bottom up
-        while from_H != 0:
-            if to_H - h < 0:
-                # If next segment exceeds top, start from top
-                from_H = 0
-                to_H = h
-            else:
-                # Determine upper boundary of segment
-                from_H = to_H - h
-            # Check if current segment contains mask pixels
+        to_H = H
+        while to_H > 0:
+            from_H = max(0, to_H - h)
             if not np.all(mask[from_H:to_H, :] == 0) and np.sum(mask[from_H:to_H, :]) > 10:
-                # If not first segment, move down to ensure no missed mask areas
-                if to_H != H:
-                    move = 0
-                    while to_H + move < H and not np.all(mask[to_H + move, :] == 0):
-                        move += 1
-                    # Ensure not exceeding bottom
-                    if to_H + move < H and move < h:
-                        to_H += move
-                        from_H += move
-                # Add segment to list
-                if (from_H, to_H) not in inpaint_area:
-                    inpaint_area.append((from_H, to_H))
-                else:
-                    break
-            # Move to next segment
-            to_H -= h
-        return inpaint_area  # Return inpaint area list
+                # Find where the contiguous mask block ends entirely
+                move_down = 0
+                while to_H + move_down < H and not np.all(mask[to_H + move_down, :] == 0):
+                    move_down += 1
+                
+                move_up = 0
+                while from_H - move_up > 0 and not np.all(mask[from_H - move_up - 1, :] == 0):
+                    move_up += 1
+                
+                new_to_H = to_H + move_down
+                new_from_H = from_H - move_up
+                
+                if new_to_H - new_from_H < h:
+                    if new_to_H + (h - (new_to_H - new_from_H)) <= H:
+                        new_to_H = new_from_H + h
+                    else:
+                        new_from_H = max(0, new_to_H - h)
+                
+                if (new_from_H, new_to_H) not in inpaint_area:
+                    inpaint_area.append((new_from_H, new_to_H))
+                
+                to_H = new_from_H
+            else:
+                to_H -= h
+        return inpaint_area
 
     @staticmethod
     def get_inpaint_area_by_selection(input_sub_area, mask):
@@ -340,7 +336,8 @@ class STTNVideoInpaint:
                         for k in range(len(inpaint_area)):
                             if j < len(comps[k]):  # Ensure index is valid
                                 # Rescale inpainted image back to original resolution and fuse into original frame
-                                comp = cv2.resize(comps[k][j], (frame_info['W_ori'], split_h))
+                                custom_h = inpaint_area[k][1] - inpaint_area[k][0]
+                                comp = cv2.resize(comps[k][j], (frame_info['W_ori'], custom_h))
                                 comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
                                 mask_area = mask[inpaint_area[k][0]:inpaint_area[k][1], :]
                                 frame[inpaint_area[k][0]:inpaint_area[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[inpaint_area[k][0]:inpaint_area[k][1], :, :]
