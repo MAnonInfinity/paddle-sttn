@@ -36,9 +36,14 @@ OUTPUT_VIDEO = "output.mp4"
 # 'latin' = Latin-script languages (French, Spanish, etc.)
 OCR_LANG = "ch"
 
-# Subtitle area override — set to (ymin, ymax, xmin, xmax) to force-process a region
-# even when OCR detects nothing.  Leave as None for automatic detection.
-# Example for 1920x1080: SUB_AREA = (900, 1060, 80, 1840)
+# Subtitle area — REQUIRED when STTN_SKIP_DETECTION=True in config.py.
+# Format: (ymin, ymax, xmin, xmax) in pixels.
+# To find the right values: open the video in VLC → pause on a subtitle frame
+# → Tools → Media Information → Video tab shows resolution.
+# Then estimate the subtitle band from the bottom of the frame.
+# Example for a 720x1280 vertical video with subtitles in the lower third:
+#   SUB_AREA = (750, 950, 30, 690)
+# Leave as None to fall back to full-frame mode (not recommended with skip-detection).
 SUB_AREA = None
 # ---------------------
 
@@ -824,11 +829,10 @@ class SubtitleRemover:
     def sttn_mode(self, tbar):
         # Skip searching for subtitle frames?
         if config.STTN_SKIP_DETECTION:
-            # If skipped, use sttn mode directly
+            # If skipped, use sttn mode directly with manually configured sub_area
             self.sttn_mode_with_no_detection(tbar)
         else:
             print('use sttn mode')
-            sttn_inpaint = STTNInpaint()
             sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
             if not sub_list:
                 if self.sub_area is not None:
@@ -836,76 +840,128 @@ class SubtitleRemover:
                     self.sttn_mode_with_no_detection(tbar)
                 else:
                     print('[Warning] No subtitles detected and no sub_area is configured.')
-                    print('[Warning] Set sub_area in the script or configure STTN_SKIP_DETECTION=True to force-process a region.')
                     print('[Warning] Output video will be a copy of the input (no processing done).')
                 return
+
+            # Build intervals from the detected frames
             continuous_frame_no_list = self.sub_detector.find_continuous_ranges_with_same_mask(sub_list)
-            print(f'[Detection] Found {len(sub_list)} subtitle frames in {len(continuous_frame_no_list)} intervals.')
-            # Expand intervals to cover neighboring frames that OCR may have missed
-            # (subtitles persist across time, so detected frames anchor the regions)
             continuous_frame_no_list = self.sub_detector.expand_and_merge_intervals(continuous_frame_no_list)
             continuous_frame_no_list = self.sub_detector.filter_and_merge_intervals(continuous_frame_no_list)
-            print(f'[Detection] After expansion: {len(continuous_frame_no_list)} intervals covering {sum(e - s + 1 for s, e in continuous_frame_no_list)} frames.')
-            start_end_map = dict()
-            for interval in continuous_frame_no_list:
-                start, end = interval
-                start_end_map[start] = end
+            print(f'[Detection] Found {len(sub_list)} subtitle frames across '
+                  f'{len(continuous_frame_no_list)} intervals.')
+
+            # --- Per-interval unified mask approach ---
+            # For each interval we collect every OCR box detected in any frame of
+            # that interval and compute their envelope (union bounding box + padding).
+            # That one stable rectangle becomes the mask for the whole interval.
+            #
+            # Why this beats both previous approaches:
+            #   Global mask  → wastes compute on areas with no text in that scene
+            #   Per-batch varying mask → ghost text, inconsistent across video lengths
+            #   Per-interval envelope → exactly as big as needed, no ghost text ✅
+
+            PAD = config.SUBTITLE_AREA_DEVIATION_PIXEL
+
+            # Pre-compute the unified mask for each interval
+            interval_masks = {}
+            for start, end in continuous_frame_no_list:
+                xs_min, xs_max, ys_min, ys_max = [], [], [], []
+                for frame_no in range(start, end + 1):
+                    if frame_no not in sub_list:
+                        continue
+                    for xmin, xmax, ymin, ymax in sub_list[frame_no]:
+                        # Skip false-positive tall boxes (non-subtitle text)
+                        if (ymax - ymin) - (xmax - xmin) > config.THRESHOLD_HEIGHT_WIDTH_DIFFERENCE:
+                            continue
+                        xs_min.append(xmin)
+                        xs_max.append(xmax)
+                        ys_min.append(ymin)
+                        ys_max.append(ymax)
+
+                if not xs_min:
+                    # Interval had only filtered-out boxes — skip it
+                    interval_masks[(start, end)] = None
+                    continue
+
+                u_xmin = max(0, min(xs_min) - PAD)
+                u_xmax = min(self.frame_width, max(xs_max) + PAD)
+                u_ymin = max(0, min(ys_min) - PAD)
+                u_ymax = min(self.frame_height, max(ys_max) + PAD)
+
+                mask_coords = [(u_xmin, u_xmax, u_ymin, u_ymax)]
+                interval_masks[(start, end)] = create_mask(self.mask_size, mask_coords)
+                print(f'  Interval [{start}-{end}]: '
+                      f'mask y=[{u_ymin},{u_ymax}] x=[{u_xmin},{u_xmax}]')
+
+            # Build a fast lookup: frame_no → (start, end) of its interval
+            frame_to_interval = {}
+            for start, end in continuous_frame_no_list:
+                for fn in range(start, end + 1):
+                    frame_to_interval[fn] = (start, end)
+
+            sttn_inpaint = STTNInpaint()
             current_frame_index = 0
             print('[Processing] start removing subtitles...')
+
             while True:
                 ret, frame = self.video_cap.read()
-                # If EOF, end
                 if not ret:
                     break
                 current_frame_index += 1
-                # If current frame no is start of subtitle interval. If not, write directly
-                if current_frame_index not in start_end_map.keys():
+
+                interval_key = frame_to_interval.get(current_frame_index)
+
+                # Frame not in any subtitle interval — write directly
+                if interval_key is None:
                     self.video_writer.write(frame)
-                    print(f'write frame: {current_frame_index}')
                     self.update_progress(tbar, increment=1)
                     if self.gui_mode:
                         self.preview_frame = cv2.hconcat([frame, frame])
-                # If start of interval, find end
-                else:
-                    start_frame_index = current_frame_index
-                    end_frame_index = start_end_map[current_frame_index]
-                    print(f'processing frame {start_frame_index} to {end_frame_index}')
-                    # List to store video frames needing inpaint
-                    frames_need_inpaint = list()
-                    frames_need_inpaint.append(frame)
-                    inner_index = 0
-                    # Continue reading until end
-                    for j in range(end_frame_index - start_frame_index):
+                    continue
+
+                start_frame_index, end_frame_index = interval_key
+
+                # Only process when we're at the START of an interval
+                if current_frame_index != start_frame_index:
+                    # Should not happen since we jump to end after processing,
+                    # but guard just in case
+                    self.video_writer.write(frame)
+                    self.update_progress(tbar, increment=1)
+                    continue
+
+                mask = interval_masks.get(interval_key)
+                if mask is None:
+                    # All boxes in this interval were filtered — write frames unchanged
+                    for _ in range(end_frame_index - start_frame_index + 1):
+                        self.video_writer.write(frame)
+                        self.update_progress(tbar, increment=1)
                         ret, frame = self.video_cap.read()
                         if not ret:
                             break
                         current_frame_index += 1
-                        frames_need_inpaint.append(frame)
-                    mask_area_coordinates = []
-                    # 1. Get the set of all mask coordinates for current batch
-                    for mask_index in range(start_frame_index, end_frame_index):
-                        if mask_index in sub_list.keys():
-                            for area in sub_list[mask_index]:
-                                xmin, xmax, ymin, ymax = area
-                                # Determine if it is a non-subtitle region (if width > length, it is considered error detection)
-                                if (ymax - ymin) - (xmax - xmin) > config.THRESHOLD_HEIGHT_WIDTH_DIFFERENCE:
-                                    continue
-                                if area not in mask_area_coordinates:
-                                    mask_area_coordinates.append(area)
-                    # 1. Get mask for current batch
-                    mask = create_mask(self.mask_size, mask_area_coordinates)
-                    print(f'inpaint with mask: {mask_area_coordinates}')
-                    for batch in batch_generator(frames_need_inpaint, config.STTN_MAX_LOAD_NUM):
-                        # 2. Call batch inference
-                        if len(batch) >= 1:
-                            inpainted_frames = sttn_inpaint(batch, mask)
-                            for i, inpainted_frame in enumerate(inpainted_frames):
-                                self.video_writer.write(inpainted_frame)
-                                print(f'write frame: {start_frame_index + inner_index} with mask')
-                                inner_index += 1
-                                if self.gui_mode:
-                                    self.preview_frame = cv2.hconcat([batch[i], inpainted_frame])
-                        self.update_progress(tbar, increment=len(batch))
+                    continue
+
+                print(f'[Processing] interval {start_frame_index}→{end_frame_index}')
+
+                # Collect all frames in the interval
+                frames_need_inpaint = [frame]
+                for _ in range(end_frame_index - start_frame_index):
+                    ret, frame = self.video_cap.read()
+                    if not ret:
+                        break
+                    current_frame_index += 1
+                    frames_need_inpaint.append(frame)
+
+                # Inpaint in batches using the interval's unified mask
+                inner_index = 0
+                for batch in batch_generator(frames_need_inpaint, config.STTN_MAX_LOAD_NUM):
+                    inpainted_frames = sttn_inpaint(batch, mask)
+                    for i, inpainted_frame in enumerate(inpainted_frames):
+                        self.video_writer.write(inpainted_frame)
+                        inner_index += 1
+                        if self.gui_mode:
+                            self.preview_frame = cv2.hconcat([batch[i], inpainted_frame])
+                    self.update_progress(tbar, increment=len(batch))
 
     def lama_mode(self, tbar):
         print('use lama mode')

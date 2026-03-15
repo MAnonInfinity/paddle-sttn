@@ -144,7 +144,7 @@ PIXEL_TOLERANCE_X = 20  # Allowed horizontal deviation in pixels
 
 # ********** InpaintMode.STTN algorithm settings start **********
 # Parameters below only take effect when using STTN algorithm
-STTN_SKIP_DETECTION = False  # Set to False to enable automatic subtitle detection
+STTN_SKIP_DETECTION = False  # Set to True only to bypass OCR and use SUB_AREA directly
 # Reference frame stride
 STTN_NEIGHBOR_STRIDE = 5
 # Reference frame length (quantity)
