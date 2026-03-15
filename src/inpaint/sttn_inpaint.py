@@ -176,14 +176,14 @@ class STTNInpaint:
         to_H = H
         while to_H > 0:
             from_H = max(0, to_H - h)
-            if not np.all(mask[from_H:to_H, :2] == 0) and np.sum(mask[from_H:to_H, :2]) > 10:
+            if not np.all(mask[from_H:to_H, :] == 0) and np.sum(mask[from_H:to_H, :]) > 10:
                 # Find where the contiguous mask block ends entirely
                 move_down = 0
-                while to_H + move_down < H and not np.all(mask[to_H + move_down, :2] == 0):
+                while to_H + move_down < H and not np.all(mask[to_H + move_down, :] == 0):
                     move_down += 1
                 
                 move_up = 0
-                while from_H - move_up > 0 and not np.all(mask[from_H - move_up - 1, :2] == 0):
+                while from_H - move_up > 0 and not np.all(mask[from_H - move_up - 1, :] == 0):
                     move_up += 1
                 
                 new_to_H = to_H + move_down
