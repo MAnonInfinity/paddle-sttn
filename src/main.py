@@ -108,10 +108,10 @@ class SubtitleDetect:
                 (x2, y2) = int(i[1][0]), int(i[1][1])
                 (x3, y3) = int(i[2][0]), int(i[2][1])
                 (x4, y4) = int(i[3][0]), int(i[3][1])
-                xmin = max(x1, x4)
-                xmax = min(x2, x3)
-                ymin = max(y1, y2)
-                ymax = min(y3, y4)
+                xmin = min(x1, x2, x3, x4)
+                xmax = max(x1, x2, x3, x4)
+                ymin = min(y1, y2, y3, y4)
+                ymax = max(y1, y2, y3, y4)
                 coordinate_list.append((xmin, xmax, ymin, ymax))
         return coordinate_list
 
@@ -692,10 +692,10 @@ class SubtitleRemover:
                 (x2, y2) = int(i[1][0]), int(i[1][1])
                 (x3, y3) = int(i[2][0]), int(i[2][1])
                 (x4, y4) = int(i[3][0]), int(i[3][1])
-                xmin = max(x1, x4)
-                xmax = min(x2, x3)
-                ymin = max(y1, y2)
-                ymax = min(y3, y4)
+                xmin = min(x1, x2, x3, x4)
+                xmax = max(x1, x2, x3, x4)
+                ymin = min(y1, y2, y3, y4)
+                ymax = max(y1, y2, y3, y4)
                 coordinate_list.append((xmin, xmax, ymin, ymax))
         return coordinate_list
 
@@ -865,7 +865,7 @@ class SubtitleRemover:
             # Pre-compute the unified mask for each interval
             interval_masks = {}
             for start, end in continuous_frame_no_list:
-                xs_min, xs_max, ys_min, ys_max = [], [], [], []
+                mask_coords = []
                 for frame_no in range(start, end + 1):
                     if frame_no not in sub_list:
                         continue
@@ -873,25 +873,19 @@ class SubtitleRemover:
                         # Skip false-positive tall boxes (non-subtitle text)
                         if (ymax - ymin) - (xmax - xmin) > config.THRESHOLD_HEIGHT_WIDTH_DIFFERENCE:
                             continue
-                        xs_min.append(xmin)
-                        xs_max.append(xmax)
-                        ys_min.append(ymin)
-                        ys_max.append(ymax)
+                        u_xmin = xmin
+                        u_xmax = xmax
+                        u_ymin = ymin
+                        u_ymax = ymax
+                        mask_coords.append((u_xmin, u_xmax, u_ymin, u_ymax))
 
-                if not xs_min:
+                if not mask_coords:
                     # Interval had only filtered-out boxes — skip it
                     interval_masks[(start, end)] = None
                     continue
 
-                u_xmin = max(0, min(xs_min) - PAD)
-                u_xmax = min(self.frame_width, max(xs_max) + PAD)
-                u_ymin = max(0, min(ys_min) - PAD)
-                u_ymax = min(self.frame_height, max(ys_max) + PAD)
-
-                mask_coords = [(u_xmin, u_xmax, u_ymin, u_ymax)]
                 interval_masks[(start, end)] = create_mask(self.mask_size, mask_coords)
-                print(f'  Interval [{start}-{end}]: '
-                      f'mask y=[{u_ymin},{u_ymax}] x=[{u_xmin},{u_xmax}]')
+                print(f'  Interval [{start}-{end}]: generated unified mask containing {len(mask_coords)} boxes')
 
             # Build a fast lookup: frame_no → (start, end) of its interval
             frame_to_interval = {}

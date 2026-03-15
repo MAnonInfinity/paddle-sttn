@@ -132,7 +132,7 @@ MODE optional algorithm types:
 MODE = InpaintMode.STTN
 # [Set pixel deviation]
 # Used to determine if it is a non-subtitle area (generally subtitle text boxes are wider than they are high)
-THRESHOLD_HEIGHT_WIDTH_DIFFERENCE = 10
+THRESHOLD_HEIGHT_WIDTH_DIFFERENCE = 50
 # Used to expand mask size, prevents text borders or residue in inpaint stage
 SUBTITLE_AREA_DEVIATION_PIXEL = 25  # Increased for cleaner coverage
 # Used to determine if two text boxes are on the same line (within specified vertical pixel difference)
