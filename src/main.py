@@ -873,11 +873,12 @@ class SubtitleRemover:
                         # Skip false-positive tall boxes (non-subtitle text)
                         if (ymax - ymin) - (xmax - xmin) > config.THRESHOLD_HEIGHT_WIDTH_DIFFERENCE:
                             continue
-                        u_xmin = xmin
-                        u_xmax = xmax
-                        u_ymin = ymin
-                        u_ymax = ymax
-                        mask_coords.append((u_xmin, u_xmax, u_ymin, u_ymax))
+                        # Use individual box with padding
+                        box_xmin = max(0, xmin - PAD)
+                        box_xmax = min(self.frame_width, xmax + PAD)
+                        box_ymin = max(0, ymin - PAD)
+                        box_ymax = min(self.frame_height, ymax + PAD)
+                        mask_coords.append((box_xmin, box_xmax, box_ymin, box_ymax))
 
                 if not mask_coords:
                     # Interval had only filtered-out boxes — skip it

@@ -169,36 +169,58 @@ class STTNInpaint:
 
     @staticmethod
     def get_inpaint_area_by_mask(H, h, mask):
+        """
+        Get subtitle removal area, determine region and height based on mask
+        """
         inpaint_area = []
         to_H = H
         while to_H > 0:
             from_H = max(0, to_H - h)
-            if not np.all(mask[from_H:to_H, :] == 0) and np.sum(mask[from_H:to_H, :]) > 10:
+            if not np.all(mask[from_H:to_H, :2] == 0) and np.sum(mask[from_H:to_H, :2]) > 10:
                 # Find where the contiguous mask block ends entirely
                 move_down = 0
-                while to_H + move_down < H and not np.all(mask[to_H + move_down, :] == 0):
+                while to_H + move_down < H and not np.all(mask[to_H + move_down, :2] == 0):
                     move_down += 1
                 
                 move_up = 0
-                while from_H - move_up > 0 and not np.all(mask[from_H - move_up - 1, :] == 0):
+                while from_H - move_up > 0 and not np.all(mask[from_H - move_up - 1, :2] == 0):
                     move_up += 1
                 
                 new_to_H = to_H + move_down
                 new_from_H = from_H - move_up
                 
-                if new_to_H - new_from_H < h:
-                    if new_to_H + (h - (new_to_H - new_from_H)) <= H:
-                        new_to_H = new_from_H + h
-                    else:
-                        new_from_H = max(0, new_to_H - h)
-                
-                if (new_from_H, new_to_H) not in inpaint_area:
-                    inpaint_area.append((new_from_H, new_to_H))
-                
-                to_H = new_from_H
+                if new_to_H - new_from_H <= h:
+                    diff = h - (new_to_H - new_from_H)
+                    pad_down = min(diff, H - new_to_H)
+                    new_to_H += pad_down
+                    diff -= pad_down
+                    new_from_H = max(0, new_from_H - diff)
+                    
+                    if (new_from_H, new_to_H) not in inpaint_area:
+                        inpaint_area.append((new_from_H, new_to_H))
+                    to_H = new_from_H
+                else:
+                    chunks = []
+                    temp_to_H = new_to_H
+                    while temp_to_H > new_from_H:
+                        temp_from_H = max(new_from_H, temp_to_H - h)
+                        if temp_to_H - temp_from_H < h:
+                            diff = h - (temp_to_H - temp_from_H)
+                            pad_down = min(diff, H - temp_to_H)
+                            temp_to_H += pad_down
+                            diff -= pad_down
+                            temp_from_H = max(0, temp_from_H - diff)
+                            
+                        chunks.append((temp_from_H, temp_to_H))
+                        temp_to_H = temp_from_H
+                        
+                    for c in chunks:
+                        if c not in inpaint_area:
+                            inpaint_area.append(c)
+                    to_H = new_from_H
             else:
                 to_H -= h
-        return inpaint_area
+        return inpaint_area  # Return inpaint area list
 
     @staticmethod
     def get_inpaint_area_by_selection(input_sub_area, mask):
