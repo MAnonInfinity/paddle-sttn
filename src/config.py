@@ -175,15 +175,21 @@ LAMA_SUPER_FAST = False
 # no flicker, and per-frame thresholding also recovers frames OCR missed.
 USE_STROKE_MASK = True
 # Inpainter for the stroke masks:
-# - 'propainter': flow-based video inpainting. Propagates REAL background across
-#   frames along optical flow → temporally coherent (no flicker) and no grey.
-#   Best quality; heaviest VRAM. Recommended if it fits.
-# - 'lama': per-frame spatial inpainting. Never grey, but re-hallucinates each
-#   frame independently → flickers. Used as the automatic fallback if ProPainter
-#   runs out of memory.
-# - 'sttn': temporal, but grey-fills static subtitles (same pixels masked every
-#   frame → no reference). Do not use for static-position subtitles.
-STROKE_INPAINTER = 'propainter'
+# - 'plate': temporal-median background plate. For each band pixel, median of the
+#   frames where it is NOT under a stroke → the true sharp background behind fixed
+#   subtitles. Real pixels (no blur), no flicker, no GPU. Moving pixels (person
+#   crossing the band) fall back to LaMa. Best fit for fixed subs over mostly
+#   static backgrounds. Default.
+# - 'propainter': flow-based video inpainting. Temporally coherent, but on a T4 it
+#   only fits downscaled → soft fills. Heaviest VRAM.
+# - 'lama': per-frame spatial inpainting. Never grey, but flickers.
+# - 'sttn': grey-fills static subtitles (no temporal reference). Avoid.
+STROKE_INPAINTER = 'plate'
+# 'plate' mode: a band pixel's median is trusted only if it has at least this many
+# stroke-free samples in the chunk and its temporal std is below the threshold
+# (i.e. the background there is actually static). Otherwise LaMa fills it.
+PLATE_MIN_SAMPLES = 3
+PLATE_STD_THRESH = 16
 # ProPainter frames per batch. Lower if you hit CUDA OOM.
 PROPAINTER_SUB_VIDEO_LENGTH = 10
 # Run ProPainter only on a horizontal strip around the subtitle band (full width,

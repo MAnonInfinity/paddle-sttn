@@ -1236,9 +1236,10 @@ class SubtitleRemover:
 
                     # Temporal stabilisation: OR each frame's mask with its
                     # neighbours so the inpainted region stops jittering
-                    # frame-to-frame (the main source of LaMa flicker).
+                    # frame-to-frame (the main source of LaMa flicker). Skipped for
+                    # 'plate' mode, where bigger holes mean fewer background samples.
                     w = config.STROKE_TEMPORAL_WINDOW
-                    if w > 0 and len(masks_batch) > 1:
+                    if config.STROKE_INPAINTER != 'plate' and w > 0 and len(masks_batch) > 1:
                         stabilised = []
                         n = len(masks_batch)
                         for i in range(n):
@@ -1277,7 +1278,42 @@ class SubtitleRemover:
                         out = f if (m is None or not m.any()) else self.lama_inpaint(f, m)
                         _write(out, f)
 
-                if config.STROKE_INPAINTER == 'sttn':
+                if config.STROKE_INPAINTER == 'plate' and masks_batch is not None:
+                    # Temporal-median background plate (sharp, real pixels, no GPU,
+                    # no flicker). For each band pixel, take the median over the
+                    # frames where it is NOT under a stroke -> the true background
+                    # behind fixed subtitles. Pixels that move (a person crossing
+                    # the band) have unstable samples; those fall back to LaMa.
+                    sy0, sy1 = pp_strip if pp_strip is not None else (0, self.frame_height)
+                    strips = np.stack([f[sy0:sy1, :].astype(np.float32) for f in frames_batch])
+                    msk = np.stack([(m[sy0:sy1, :] > 0) for m in masks_batch])  # (N,h,w)
+                    samp = strips.copy()
+                    samp[msk] = np.nan
+                    with np.errstate(all='ignore'):
+                        import warnings as _w
+                        with _w.catch_warnings():
+                            _w.simplefilter('ignore')
+                            plate = np.nanmedian(samp, axis=0)            # (h,w,3)
+                            valid = (~np.isnan(samp[:, :, :, 0])).sum(0)   # (h,w)
+                            gray = samp.mean(axis=3)                       # (N,h,w)
+                            tstd = np.nanstd(gray, axis=0)                 # (h,w)
+                    reliable = (valid >= config.PLATE_MIN_SAMPLES) & (tstd < config.PLATE_STD_THRESH)
+                    plate_u8 = np.nan_to_num(plate).astype(np.uint8)
+                    for i, f in enumerate(frames_batch):
+                        sm = msk[i]
+                        if sm.any():
+                            region = f[sy0:sy1, :]
+                            rel = sm & reliable
+                            region[rel] = plate_u8[rel]
+                            unrel = sm & ~reliable
+                            if unrel.any():
+                                if self.lama_inpaint is None:
+                                    self.lama_inpaint = LamaInpaint()
+                                mfull = np.zeros((self.frame_height, self.frame_width), np.uint8)
+                                mfull[sy0:sy1, :][unrel] = 255
+                                f = self.lama_inpaint(f, mfull)
+                        _write(f, f)
+                elif config.STROKE_INPAINTER == 'sttn':
                     # (Kept for reference; grey-fills static subtitles — not advised.)
                     if sttn_inpaint is None:
                         sttn_inpaint = STTNInpaint()
