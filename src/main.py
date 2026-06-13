@@ -23,13 +23,16 @@ def colab_autodownload(path):
     to call unconditionally for any debug asset we want pushed to the user's
     machine automatically — same convenience as the final output download.
     """
+    if not (path and os.path.exists(path)):
+        return
     try:
-        if 'google.colab' not in sys.modules:
-            return
+        # Importing succeeds only inside a Colab runtime; no need to inspect
+        # sys.modules (which may not list it depending on how main.py is run).
         from google.colab import files
-        if path and os.path.exists(path):
-            files.download(path)
-            print(f'[Colab] auto-downloading: {path}')
+        files.download(path)
+        print(f'[Colab] auto-downloading: {path}')
+    except ImportError:
+        pass  # not running in Colab — nothing to do
     except Exception as e:
         print(f'[Colab] auto-download skipped for {path}: {e}')
 from src.scenedetect import scene_detect
@@ -1041,7 +1044,6 @@ class SubtitleRemover:
                 for fn in range(start, end + 1):
                     frame_to_interval[fn] = (start, end)
 
-            sttn_inpaint = STTNInpaint()
             current_frame_index = 0
             print('[Processing] start removing subtitles...')
 
@@ -1085,25 +1087,33 @@ class SubtitleRemover:
 
                 print(f'[Processing] interval {start_frame_index}→{end_frame_index}')
 
-                # Collect all frames in the interval
-                frames_need_inpaint = [frame]
+                # Inpaint the band with LaMa, frame by frame.
+                #
+                # STTN cannot fill a solid static band: it reconstructs a hole by
+                # borrowing from frames where that region is visible, but our band
+                # is masked in *every* frame, so it has no reference and outputs
+                # flat grey. LaMa is a single-image inpainter — it fills the band
+                # from the surrounding spatial context of each frame, which is
+                # exactly what a fixed subtitle strip needs.
+                if self.lama_inpaint is None:
+                    self.lama_inpaint = LamaInpaint()
+
+                inpainted_frame = self.lama_inpaint(frame, mask)
+                self.video_writer.write(inpainted_frame)
+                if self.gui_mode:
+                    self.preview_frame = cv2.hconcat([frame, inpainted_frame])
+                self.update_progress(tbar, increment=1)
+
                 for _ in range(end_frame_index - start_frame_index):
                     ret, frame = self.video_cap.read()
                     if not ret:
                         break
                     current_frame_index += 1
-                    frames_need_inpaint.append(frame)
-
-                # Inpaint in batches using the interval's unified mask
-                inner_index = 0
-                for batch in batch_generator(frames_need_inpaint, config.STTN_MAX_LOAD_NUM):
-                    inpainted_frames = sttn_inpaint(batch, mask)
-                    for i, inpainted_frame in enumerate(inpainted_frames):
-                        self.video_writer.write(inpainted_frame)
-                        inner_index += 1
-                        if self.gui_mode:
-                            self.preview_frame = cv2.hconcat([batch[i], inpainted_frame])
-                    self.update_progress(tbar, increment=len(batch))
+                    inpainted_frame = self.lama_inpaint(frame, mask)
+                    self.video_writer.write(inpainted_frame)
+                    if self.gui_mode:
+                        self.preview_frame = cv2.hconcat([frame, inpainted_frame])
+                    self.update_progress(tbar, increment=1)
 
     def lama_mode(self, tbar):
         print('use lama mode')
