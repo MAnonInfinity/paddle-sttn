@@ -954,29 +954,63 @@ class SubtitleRemover:
                   f'y {b_ymin}-{b_ymax}) from {len(sub_list)} detected frames.')
             unified_mask = create_mask(self.mask_size, [band])
 
-            # Build active intervals, bridging OCR gaps up to ~1s of frames so
-            # isolated misses don't break a continuous subtitle stretch.
-            gap_frames = max(int(self.fps), 12) if self.fps and self.fps > 0 else 15
-            continuous_frame_no_list = self.sub_detector.build_active_intervals(
-                list(sub_list.keys()), gap_frames)
-            # Ensure each interval is long enough for STTN's reference sampling.
-            continuous_frame_no_list = self.sub_detector.expand_and_merge_intervals(continuous_frame_no_list)
-            continuous_frame_no_list = self.sub_detector.filter_and_merge_intervals(continuous_frame_no_list)
+            # Debug: save a sample detected frame with the band drawn on it so the
+            # band's alignment can be checked at a glance, without a full re-run.
+            try:
+                sample_no = sorted(sub_list.keys())[len(sub_list) // 2]
+                dbg_cap = cv2.VideoCapture(self.video_path)
+                dbg_cap.set(cv2.CAP_PROP_POS_FRAMES, sample_no - 1)
+                ok, dbg_frame = dbg_cap.read()
+                dbg_cap.release()
+                if ok:
+                    cv2.rectangle(dbg_frame, (b_xmin, b_ymin), (b_xmax, b_ymax), (0, 0, 255), 3)
+                    dbg_path = os.path.join(os.path.dirname(self.video_out_name),
+                                            f'{self.vd_name}_band_debug.png')
+                    cv2.imwrite(dbg_path, dbg_frame)
+                    print(f'[Band] Wrote band-overlay debug image: {dbg_path}')
+            except Exception as e:
+                print(f'[Band] (debug overlay skipped: {e})')
 
-            # Split intervals at scene-cut boundaries. STTN reconstructs masked
-            # regions from neighbouring frames; if an interval spans a hard cut,
-            # it pulls reference pixels from a different scene → ghosting/garbage
-            # fill. Done last so the earlier expansion can't re-cross a cut.
+            # Coverage strategy: do NOT let per-frame OCR decide which frames get
+            # cleaned — it misses sustained runs (whole dialogue lines), which is
+            # exactly why subtitles survived before. Instead:
+            #   1. take the active span (first→last detected frame),
+            #   2. split it at scene cuts,
+            #   3. keep only scene segments that contain at least one detection,
+            #   4. process EVERY frame of those segments with the band mask.
+            # OCR now only tells us *where* (the band) and *which scenes* have
+            # subtitles — not every individual frame. A frame OCR blinked on is
+            # still inside a kept scene segment, so it still gets cleaned.
+            detected_frames = sorted(sub_list.keys())
+            span_start, span_end = detected_frames[0], detected_frames[-1]
+
             scene_div_points = self.sub_detector.get_scene_div_frame_no(self.video_path)
-            if scene_div_points:
-                before = len(continuous_frame_no_list)
-                continuous_frame_no_list = self.sub_detector.split_range_by_scene(
-                    continuous_frame_no_list, scene_div_points)
-                print(f'[Scene] {len(scene_div_points)} scene cuts → split '
-                      f'{before} into {len(continuous_frame_no_list)} intervals.')
+            scene_segments = self.sub_detector.split_range_by_scene(
+                [(span_start, span_end)], list(scene_div_points))
 
-            print(f'[Detection] {len(sub_list)} subtitle frames bridged into '
-                  f'{len(continuous_frame_no_list)} active intervals (gap<={gap_frames}).')
+            detected_set = set(detected_frames)
+            kept_segments = [
+                (s, e) for s, e in scene_segments
+                if any(fn in detected_set for fn in range(s, e + 1))
+            ]
+            dropped = len(scene_segments) - len(kept_segments)
+
+            # Tile each kept segment into chunks no larger than STTN_MAX_LOAD_NUM
+            # so we never hold more than one batch of frames in memory, and STTN
+            # never references across a scene cut (segments are already cut-bounded).
+            continuous_frame_no_list = []
+            for s, e in kept_segments:
+                cur = s
+                while cur <= e:
+                    chunk_end = min(cur + config.STTN_MAX_LOAD_NUM - 1, e)
+                    continuous_frame_no_list.append((cur, chunk_end))
+                    cur = chunk_end + 1
+
+            covered = sum(e - s + 1 for s, e in continuous_frame_no_list)
+            print(f'[Coverage] active span {span_start}-{span_end}; '
+                  f'{len(scene_div_points)} scene cuts → {len(scene_segments)} segments, '
+                  f'kept {len(kept_segments)} (dropped {dropped} subtitle-free); '
+                  f'processing {covered} frames in {len(continuous_frame_no_list)} chunks.')
 
             # Every active interval uses the same stable band mask.
             interval_masks = {key: unified_mask for key in continuous_frame_no_list}
