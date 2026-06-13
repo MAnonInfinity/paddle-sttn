@@ -174,23 +174,21 @@ LAMA_SUPER_FAST = False
 # ~10-20x, so the inpainter fills it cleanly from adjacent background with almost
 # no flicker, and per-frame thresholding also recovers frames OCR missed.
 USE_STROKE_MASK = True
-# Stroke detection uses LOCAL contrast (adaptiveThreshold), not a global
-# brightness cutoff, so it catches muted white text in dim scenes and ignores
-# large uniform-bright regions (walls/sky).
-# Neighbourhood size for the local-brightness comparison (odd). Should be a few
-# times the text stroke width. Larger = compares against a broader background.
-STROKE_BLOCK_SIZE = 51
-# A pixel counts as a stroke if it is at least this much brighter (0-255) than
-# its local neighbourhood mean. Lower to catch fainter text; raise to be stricter.
-STROKE_LOCAL_C = 12
-# Subtitle text is white/grey: drop bright pixels whose saturation (HSV S)
-# exceeds this (skin, coloured signage).
-STROKE_S_MAX = 70
-# Grow the stroke mask by this many pixels to cover anti-aliased edges and the
-# dark outline that usually rings white subtitle text.
-STROKE_DILATE_PIXELS = 3
-# Drop connected components larger than this fraction of the band area — these are
-# bright background regions (walls, sky, clothing), not text strokes.
-STROKE_MAX_COMPONENT_AREA_FRAC = 0.30
+# Stroke detection runs INSIDE each OCR text box (localised by detection),
+# capturing both the white core and the dark outline of subtitle text via
+# local contrast. Detecting both polarities is what makes it work on any
+# background: on dark backgrounds the bright core fires; on bright backgrounds
+# (e.g. white clothing) the dark outline fires.
+# Neighbourhood size (odd) for the local-contrast comparison.
+STROKE_BLOCK_SIZE = 25
+# A pixel is a stroke if it is at least this much brighter OR darker (0-255)
+# than its local neighbourhood mean. Lower to catch fainter text.
+STROKE_LOCAL_C = 10
+# Grow the stroke mask by this many pixels to bridge core+outline into a solid
+# glyph and cover anti-aliased edges.
+STROKE_DILATE_PIXELS = 2
+# Pad each OCR box by this many pixels before stroke detection, so outline
+# pixels just outside the text bbox are still covered.
+STROKE_BOX_PAD = 4
 # ********** Stroke-level mask settings end **********
 # ******************** [MODIFIABLE] end ********************

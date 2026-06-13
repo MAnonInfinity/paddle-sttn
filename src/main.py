@@ -838,70 +838,60 @@ class SubtitleRemover:
         self.progress_total = 50 + self.progress_remover
 
     @staticmethod
-    def compute_stroke_mask(frame, band, frame_height, frame_width):
+    def compute_stroke_mask(frame, boxes, frame_height, frame_width):
         """
-        Build a tight mask of the actual subtitle text strokes inside `band`,
-        instead of masking the whole box.
+        Build a tight mask of the actual subtitle glyphs (white core + dark
+        outline) inside each OCR text box in `boxes`.
 
-        Subtitles are thin bright glyphs on a darker background. Thresholding the
-        bright/low-saturation pixels inside the band isolates the strokes, so the
-        inpainter only fills the text itself (surrounded by real background) — no
-        gray fill, no ghosting, negligible flicker. Per-frame thresholding also
-        catches text on frames OCR missed.
+        Burned-in subtitles are white text with a dark outline so they stay
+        readable on any background. We detect BOTH local-contrast polarities:
+          - locally bright pixels  -> the white core (fires on dark backgrounds)
+          - locally dark pixels    -> the dark outline (fires on bright
+            backgrounds like white clothing, where the core has no contrast)
+        Taking both is what makes removal work regardless of background, and
+        capturing the outline avoids the dark ghost left when only the core is
+        masked.
 
-        Returns a full-frame uint8 mask (0/255), or None if no strokes found.
+        Detection is confined to the (padded) OCR boxes, so high-contrast
+        background edges elsewhere in the band are never masked.
+
+        :param boxes: list of (xmin, xmax, ymin, ymax) text boxes for this frame.
+        Returns a full-frame uint8 mask (0/255), or None if nothing found.
         """
-        xmin, xmax, ymin, ymax = band
-        xmin = max(0, xmin); ymin = max(0, ymin)
-        xmax = min(frame_width, xmax); ymax = min(frame_height, ymax)
-        if xmax <= xmin or ymax <= ymin:
-            return None
-
-        roi = frame[ymin:ymax, xmin:xmax]
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        s = hsv[:, :, 1]
-
-        # Local-contrast detection: a pixel is a stroke if it is brighter than its
-        # local neighbourhood (adaptiveThreshold). This catches text at any
-        # absolute brightness (muted white in dim scenes included) and naturally
-        # ignores large uniform-bright regions (walls, sky) — they are not
-        # brighter than their own surroundings, so a global cutoff would fail
-        # here but local contrast does not.
-        block = config.STROKE_BLOCK_SIZE | 1  # must be odd
-        local_bright = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,
-            block, -config.STROKE_LOCAL_C)
-        # Whiteness gate: subtitle text is white/grey (low saturation), so drop
-        # bright but colourful pixels (skin, coloured signage).
-        white = (s <= config.STROKE_S_MAX).astype(np.uint8) * 255
-        strokes = cv2.bitwise_and(local_bright, white)
-
-        # Close 1px gaps inside glyphs, then grow to cover anti-aliasing + outline
-        kernel = np.ones((3, 3), np.uint8)
-        strokes = cv2.morphologyEx(strokes, cv2.MORPH_CLOSE, kernel)
-        if config.STROKE_DILATE_PIXELS > 0:
-            strokes = cv2.dilate(strokes, kernel, iterations=config.STROKE_DILATE_PIXELS)
-
-        # Reject big bright blobs (walls, sky, clothing) — keep text-sized pieces
-        roi_area = roi.shape[0] * roi.shape[1]
-        max_area = roi_area * config.STROKE_MAX_COMPONENT_AREA_FRAC
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(strokes, connectivity=8)
-        clean = np.zeros_like(strokes)
-        kept = 0
-        for i in range(1, n):  # 0 is background
-            area = stats[i, cv2.CC_STAT_AREA]
-            comp_h = stats[i, cv2.CC_STAT_HEIGHT]
-            # too big = background; full-band-height = not a glyph
-            if area <= max_area and comp_h < (ymax - ymin):
-                clean[labels == i] = 255
-                kept += 1
-        if kept == 0:
+        if not boxes:
             return None
 
         full = np.zeros((frame_height, frame_width), dtype=np.uint8)
-        full[ymin:ymax, xmin:xmax] = clean
-        return full
+        block = config.STROKE_BLOCK_SIZE | 1  # must be odd
+        C = config.STROKE_LOCAL_C
+        pad = config.STROKE_BOX_PAD
+        kernel = np.ones((3, 3), np.uint8)
+        any_found = False
+
+        for (xmin, xmax, ymin, ymax) in boxes:
+            x0 = max(0, int(xmin) - pad); y0 = max(0, int(ymin) - pad)
+            x1 = min(frame_width, int(xmax) + pad); y1 = min(frame_height, int(ymax) + pad)
+            if x1 - x0 < 3 or y1 - y0 < 3:
+                continue
+
+            gray = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+            # White core: brighter than local neighbourhood.
+            bright = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, block, -C)
+            # Dark outline: darker than local neighbourhood.
+            dark = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block, C)
+            m = cv2.bitwise_or(bright, dark)
+            # Bridge core+outline into solid glyphs, then grow slightly.
+            m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel, iterations=2)
+            if config.STROKE_DILATE_PIXELS > 0:
+                m = cv2.dilate(m, kernel, iterations=config.STROKE_DILATE_PIXELS)
+
+            if cv2.countNonZero(m) > 0:
+                full[y0:y1, x0:x1] = np.maximum(full[y0:y1, x0:x1], m)
+                any_found = True
+
+        return full if any_found else None
 
     def propainter_mode(self, tbar):
         print('use propainter mode')
@@ -1104,6 +1094,33 @@ class SubtitleRemover:
             # Every active interval uses the same stable band mask.
             interval_masks = {key: unified_mask for key in continuous_frame_no_list}
 
+            # Per-frame OCR boxes restricted to the subtitle band (so other
+            # on-screen text — signs, logos — is left alone), with OCR gaps filled
+            # from neighbouring frames in the same chunk (text position is stable
+            # within a line's run). These localise stroke detection; a frame OCR
+            # missed inherits its neighbour's boxes so it is still cleaned.
+            def boxes_in_band(fn):
+                out = [b for b in sub_list.get(fn, [])
+                       if b_ymin <= (b[2] + b[3]) / 2 <= b_ymax]
+                return out or None
+
+            frame_boxes = {}
+            for s, e in continuous_frame_no_list:
+                last = None
+                for fn in range(s, e + 1):
+                    cur = boxes_in_band(fn)
+                    if cur is not None:
+                        last = cur
+                    frame_boxes[fn] = last
+                # back-fill any leading gap before the first detection
+                first = next((boxes_in_band(fn) for fn in range(s, e + 1)
+                              if boxes_in_band(fn) is not None), None)
+                for fn in range(s, e + 1):
+                    if frame_boxes[fn] is None:
+                        frame_boxes[fn] = first
+                    else:
+                        break
+
             # Build a fast lookup: frame_no → (start, end) of its interval
             frame_to_interval = {}
             for start, end in continuous_frame_no_list:
@@ -1170,7 +1187,9 @@ class SubtitleRemover:
                         current_frame_index += 1
 
                     if config.USE_STROKE_MASK:
-                        m = self.compute_stroke_mask(frame, band, self.frame_height, self.frame_width)
+                        m = self.compute_stroke_mask(
+                            frame, frame_boxes.get(current_frame_index),
+                            self.frame_height, self.frame_width)
                     else:
                         m = box_mask
 
