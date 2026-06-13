@@ -858,12 +858,24 @@ class SubtitleRemover:
             return None
 
         roi = frame[ymin:ymax, xmin:xmax]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         s = hsv[:, :, 1]
-        v = hsv[:, :, 2]
 
-        # Bright + low-saturation ≈ white text
-        strokes = ((v >= config.STROKE_V_MIN) & (s <= config.STROKE_S_MAX)).astype(np.uint8) * 255
+        # Local-contrast detection: a pixel is a stroke if it is brighter than its
+        # local neighbourhood (adaptiveThreshold). This catches text at any
+        # absolute brightness (muted white in dim scenes included) and naturally
+        # ignores large uniform-bright regions (walls, sky) — they are not
+        # brighter than their own surroundings, so a global cutoff would fail
+        # here but local contrast does not.
+        block = config.STROKE_BLOCK_SIZE | 1  # must be odd
+        local_bright = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY,
+            block, -config.STROKE_LOCAL_C)
+        # Whiteness gate: subtitle text is white/grey (low saturation), so drop
+        # bright but colourful pixels (skin, coloured signage).
+        white = (s <= config.STROKE_S_MAX).astype(np.uint8) * 255
+        strokes = cv2.bitwise_and(local_bright, white)
 
         # Close 1px gaps inside glyphs, then grow to cover anti-aliasing + outline
         kernel = np.ones((3, 3), np.uint8)
@@ -1166,8 +1178,11 @@ class SubtitleRemover:
                         out = frame  # no subtitle strokes this frame — leave as-is
                     else:
                         out = self.lama_inpaint(frame, m)
-                        # Save one stroke-mask overlay for visual verification.
-                        if not getattr(self, '_stroke_debug_saved', False):
+                        # Save one stroke-mask overlay for visual verification —
+                        # only on a frame with a substantial mask (a real text
+                        # frame), not an incidental bright speck.
+                        if (not getattr(self, '_stroke_debug_saved', False)
+                                and cv2.countNonZero(m) > 200):
                             try:
                                 ov = frame.copy()
                                 ov[m > 0] = (0, 0, 255)

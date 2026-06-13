@@ -174,11 +174,18 @@ LAMA_SUPER_FAST = False
 # ~10-20x, so the inpainter fills it cleanly from adjacent background with almost
 # no flicker, and per-frame thresholding also recovers frames OCR missed.
 USE_STROKE_MASK = True
-# Burned-in subtitles are typically bright/white. A pixel is treated as a text
-# stroke if its brightness (HSV V) is at least this and its saturation (HSV S) is
-# at most this (i.e. close to white). Lower V_MIN to catch dimmer text.
-STROKE_V_MIN = 190
-STROKE_S_MAX = 60
+# Stroke detection uses LOCAL contrast (adaptiveThreshold), not a global
+# brightness cutoff, so it catches muted white text in dim scenes and ignores
+# large uniform-bright regions (walls/sky).
+# Neighbourhood size for the local-brightness comparison (odd). Should be a few
+# times the text stroke width. Larger = compares against a broader background.
+STROKE_BLOCK_SIZE = 51
+# A pixel counts as a stroke if it is at least this much brighter (0-255) than
+# its local neighbourhood mean. Lower to catch fainter text; raise to be stricter.
+STROKE_LOCAL_C = 12
+# Subtitle text is white/grey: drop bright pixels whose saturation (HSV S)
+# exceeds this (skin, coloured signage).
+STROKE_S_MAX = 70
 # Grow the stroke mask by this many pixels to cover anti-aliased edges and the
 # dark outline that usually rings white subtitle text.
 STROKE_DILATE_PIXELS = 3
