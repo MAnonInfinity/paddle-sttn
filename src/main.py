@@ -837,6 +837,60 @@ class SubtitleRemover:
         self.progress_remover = int(current_percentage) // 2
         self.progress_total = 50 + self.progress_remover
 
+    @staticmethod
+    def compute_stroke_mask(frame, band, frame_height, frame_width):
+        """
+        Build a tight mask of the actual subtitle text strokes inside `band`,
+        instead of masking the whole box.
+
+        Subtitles are thin bright glyphs on a darker background. Thresholding the
+        bright/low-saturation pixels inside the band isolates the strokes, so the
+        inpainter only fills the text itself (surrounded by real background) — no
+        gray fill, no ghosting, negligible flicker. Per-frame thresholding also
+        catches text on frames OCR missed.
+
+        Returns a full-frame uint8 mask (0/255), or None if no strokes found.
+        """
+        xmin, xmax, ymin, ymax = band
+        xmin = max(0, xmin); ymin = max(0, ymin)
+        xmax = min(frame_width, xmax); ymax = min(frame_height, ymax)
+        if xmax <= xmin or ymax <= ymin:
+            return None
+
+        roi = frame[ymin:ymax, xmin:xmax]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        s = hsv[:, :, 1]
+        v = hsv[:, :, 2]
+
+        # Bright + low-saturation ≈ white text
+        strokes = ((v >= config.STROKE_V_MIN) & (s <= config.STROKE_S_MAX)).astype(np.uint8) * 255
+
+        # Close 1px gaps inside glyphs, then grow to cover anti-aliasing + outline
+        kernel = np.ones((3, 3), np.uint8)
+        strokes = cv2.morphologyEx(strokes, cv2.MORPH_CLOSE, kernel)
+        if config.STROKE_DILATE_PIXELS > 0:
+            strokes = cv2.dilate(strokes, kernel, iterations=config.STROKE_DILATE_PIXELS)
+
+        # Reject big bright blobs (walls, sky, clothing) — keep text-sized pieces
+        roi_area = roi.shape[0] * roi.shape[1]
+        max_area = roi_area * config.STROKE_MAX_COMPONENT_AREA_FRAC
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(strokes, connectivity=8)
+        clean = np.zeros_like(strokes)
+        kept = 0
+        for i in range(1, n):  # 0 is background
+            area = stats[i, cv2.CC_STAT_AREA]
+            comp_h = stats[i, cv2.CC_STAT_HEIGHT]
+            # too big = background; full-band-height = not a glyph
+            if area <= max_area and comp_h < (ymax - ymin):
+                clean[labels == i] = 255
+                kept += 1
+        if kept == 0:
+            return None
+
+        full = np.zeros((frame_height, frame_width), dtype=np.uint8)
+        full[ymin:ymax, xmin:xmax] = clean
+        return full
+
     def propainter_mode(self, tbar):
         print('use propainter mode')
         sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
@@ -1073,9 +1127,9 @@ class SubtitleRemover:
                     self.update_progress(tbar, increment=1)
                     continue
 
-                mask = interval_masks.get(interval_key)
-                if mask is None:
-                    # All boxes in this interval were filtered — write frames unchanged
+                # Box mask (only used when stroke masking is disabled)
+                box_mask = None if config.USE_STROKE_MASK else interval_masks.get(interval_key)
+                if not config.USE_STROKE_MASK and box_mask is None:
                     for _ in range(end_frame_index - start_frame_index + 1):
                         self.video_writer.write(frame)
                         self.update_progress(tbar, increment=1)
@@ -1085,34 +1139,50 @@ class SubtitleRemover:
                         current_frame_index += 1
                     continue
 
-                print(f'[Processing] interval {start_frame_index}→{end_frame_index}')
-
-                # Inpaint the band with LaMa, frame by frame.
-                #
-                # STTN cannot fill a solid static band: it reconstructs a hole by
-                # borrowing from frames where that region is visible, but our band
-                # is masked in *every* frame, so it has no reference and outputs
-                # flat grey. LaMa is a single-image inpainter — it fills the band
-                # from the surrounding spatial context of each frame, which is
-                # exactly what a fixed subtitle strip needs.
                 if self.lama_inpaint is None:
                     self.lama_inpaint = LamaInpaint()
 
-                inpainted_frame = self.lama_inpaint(frame, mask)
-                self.video_writer.write(inpainted_frame)
-                if self.gui_mode:
-                    self.preview_frame = cv2.hconcat([frame, inpainted_frame])
-                self.update_progress(tbar, increment=1)
+                print(f'[Processing] interval {start_frame_index}→{end_frame_index}')
 
-                for _ in range(end_frame_index - start_frame_index):
-                    ret, frame = self.video_cap.read()
-                    if not ret:
-                        break
-                    current_frame_index += 1
-                    inpainted_frame = self.lama_inpaint(frame, mask)
-                    self.video_writer.write(inpainted_frame)
+                # Process every frame of the interval. Within the band we mask only
+                # the actual text strokes (config.USE_STROKE_MASK) and inpaint just
+                # those with LaMa — a tiny hole the inpainter fills cleanly from
+                # adjacent background, so no grey fill, no ghost, negligible
+                # flicker. A frame with no detected strokes is written untouched.
+                count = end_frame_index - start_frame_index + 1
+                for offset in range(count):
+                    if offset > 0:
+                        ret, frame = self.video_cap.read()
+                        if not ret:
+                            break
+                        current_frame_index += 1
+
+                    if config.USE_STROKE_MASK:
+                        m = self.compute_stroke_mask(frame, band, self.frame_height, self.frame_width)
+                    else:
+                        m = box_mask
+
+                    if m is None or not m.any():
+                        out = frame  # no subtitle strokes this frame — leave as-is
+                    else:
+                        out = self.lama_inpaint(frame, m)
+                        # Save one stroke-mask overlay for visual verification.
+                        if not getattr(self, '_stroke_debug_saved', False):
+                            try:
+                                ov = frame.copy()
+                                ov[m > 0] = (0, 0, 255)
+                                dbg = os.path.join(os.path.dirname(self.video_out_name),
+                                                   f'{self.vd_name}_stroke_debug.png')
+                                cv2.imwrite(dbg, ov)
+                                print(f'[Stroke] Wrote stroke-mask debug image: {dbg}')
+                                colab_autodownload(dbg)
+                            except Exception as e:
+                                print(f'[Stroke] (debug overlay skipped: {e})')
+                            self._stroke_debug_saved = True
+
+                    self.video_writer.write(out)
                     if self.gui_mode:
-                        self.preview_frame = cv2.hconcat([frame, inpainted_frame])
+                        self.preview_frame = cv2.hconcat([frame, out])
                     self.update_progress(tbar, increment=1)
 
     def lama_mode(self, tbar):

@@ -166,4 +166,24 @@ PROPAINTER_MAX_LOAD_NUM = 70
 # Whether to enable high-speed mode, does not guarantee inpaint quality
 LAMA_SUPER_FAST = False
 # ********** InpaintMode.LAMA algorithm settings end **********
+
+# ********** Stroke-level mask settings start **********
+# Instead of masking the whole subtitle box (which destroys good background and
+# forces the inpainter to hallucinate a large region), mask only the actual text
+# strokes found by thresholding inside the detected band. This shrinks the hole
+# ~10-20x, so the inpainter fills it cleanly from adjacent background with almost
+# no flicker, and per-frame thresholding also recovers frames OCR missed.
+USE_STROKE_MASK = True
+# Burned-in subtitles are typically bright/white. A pixel is treated as a text
+# stroke if its brightness (HSV V) is at least this and its saturation (HSV S) is
+# at most this (i.e. close to white). Lower V_MIN to catch dimmer text.
+STROKE_V_MIN = 190
+STROKE_S_MAX = 60
+# Grow the stroke mask by this many pixels to cover anti-aliased edges and the
+# dark outline that usually rings white subtitle text.
+STROKE_DILATE_PIXELS = 3
+# Drop connected components larger than this fraction of the band area — these are
+# bright background regions (walls, sky, clothing), not text strokes.
+STROKE_MAX_COMPONENT_AREA_FRAC = 0.30
+# ********** Stroke-level mask settings end **********
 # ******************** [MODIFIABLE] end ********************
