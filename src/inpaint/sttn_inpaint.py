@@ -36,10 +36,17 @@ class STTNInpaint:
         self.neighbor_stride = config.STTN_NEIGHBOR_STRIDE
         self.ref_length = config.STTN_REFERENCE_LENGTH
 
-    def __call__(self, input_frames: List[np.ndarray], input_mask: np.ndarray):
+    def __call__(self, input_frames: List[np.ndarray], input_mask: np.ndarray, frame_masks: List[np.ndarray] = None):
         """
         :param input_frames: original video frames
-        :param input_mask: subtitle region mask
+        :param input_mask: union/area mask — defines which horizontal strips to
+            process (full subtitle band). Use a generous box mask here.
+        :param frame_masks: optional list of per-frame masks (same length as
+            input_frames). When given, only these pixels are zeroed/composited per
+            frame, so a thin per-frame stroke mask is filled using the band as
+            spatial+temporal context. This is what makes STTN remove subtitles
+            cleanly AND flicker-free: the holes are tiny and consistent across
+            frames. When omitted, input_mask is used for every frame (legacy).
         """
         _, mask = cv2.threshold(input_mask, 127, 1, cv2.THRESH_BINARY)
         mask = mask[:, :, None]
@@ -49,53 +56,52 @@ class STTNInpaint:
         # Determine vertical height for subtitle removal
         split_h = int(W_ori * 3 / 16)
         inpaint_area = self.get_inpaint_area_by_mask(H_ori, split_h, mask)
-        # Initialize frame storage variables
-        # High resolution frame storage list
+
+        # Per-frame masks (binarised, with channel dim). Default to the area mask.
+        if frame_masks is not None:
+            fmasks = []
+            for fm in frame_masks:
+                _, fb = cv2.threshold(fm, 127, 1, cv2.THRESH_BINARY)
+                fmasks.append(fb[:, :, None])
+        else:
+            fmasks = [mask] * len(input_frames)
+
         frames_hr = copy.deepcopy(input_frames)
-        frames_scaled = {}  # Dictionary to store scaled frames
-        comps = {}  # Dictionary to store completed frames
-        # Storage for final video frames
+        frames_scaled = {}  # scaled frame crops per strip
+        masks_scaled = {}   # scaled per-frame mask crops per strip
+        comps = {}
         inpainted_frames = []
         for k in range(len(inpaint_area)):
-            frames_scaled[k] = []  # Initialize list for each removal part
+            frames_scaled[k] = []
+            masks_scaled[k] = []
 
-        # Read and scale frames
+        # Crop + scale frames and per-frame masks for each strip
         for j in range(len(frames_hr)):
             image = frames_hr[j]
-            # Crop and scale for each removal part
             for k in range(len(inpaint_area)):
-                image_crop = image[inpaint_area[k][0]:inpaint_area[k][1], :, :]  # Crop
-                image_resize = cv2.resize(image_crop, (self.model_input_width, self.model_input_height))  # Resize
-                frames_scaled[k].append(image_resize)  # Add resized frame to corresponding list
+                a0, a1 = inpaint_area[k][0], inpaint_area[k][1]
+                img_crop = cv2.resize(image[a0:a1, :, :], (self.model_input_width, self.model_input_height))
+                frames_scaled[k].append(img_crop)
+                m_crop = cv2.resize(fmasks[j][a0:a1, :], (self.model_input_width, self.model_input_height))
+                masks_scaled[k].append(m_crop)
 
-        # Process each removal part
+        # Inpaint each strip, zeroing each frame's own mask in the input
         for k in range(len(inpaint_area)):
-            # Scale the mask strip to model input size so the subtitle region can
-            # be zeroed out of the input (STTN expects a hole to fill, not the
-            # visible text — feeding the text in causes ghosting).
-            mask_strip = mask[inpaint_area[k][0]:inpaint_area[k][1], :]
-            mask_strip_resized = cv2.resize(
-                mask_strip, (self.model_input_width, self.model_input_height))
-            # Call inpaint function for processing
-            comps[k] = self.inpaint(frames_scaled[k], mask_strip_resized)
+            comps[k] = self.inpaint(frames_scaled[k], masks=masks_scaled[k])
 
-        # If removal parts exist
         if inpaint_area:
             for j in range(len(frames_hr)):
-                frame = frames_hr[j]  # Get original frame
-                # For each segment in the pattern
+                frame = frames_hr[j]
                 for k in range(len(inpaint_area)):
-                    custom_h = inpaint_area[k][1] - inpaint_area[k][0]
-                    comp = cv2.resize(comps[k][j], (W_ori, custom_h))  # Resize completed frame back to original size
-                    comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)  # Convert color space
-                    # Get mask area and perform image composition
-                    mask_area = mask[inpaint_area[k][0]:inpaint_area[k][1], :]  # Get mask area
-                    # Implement image fusion within the mask area
-                    frame[inpaint_area[k][0]:inpaint_area[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[inpaint_area[k][0]:inpaint_area[k][1], :, :]
-                # Add final frame to list
+                    a0, a1 = inpaint_area[k][0], inpaint_area[k][1]
+                    custom_h = a1 - a0
+                    comp = cv2.resize(comps[k][j], (W_ori, custom_h))
+                    comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
+                    # Composite using THIS frame's mask so only its strokes change
+                    mask_area = fmasks[j][a0:a1, :]
+                    frame[a0:a1, :, :] = mask_area * comp + (1 - mask_area) * frame[a0:a1, :, :]
                 inpainted_frames.append(frame)
         else:
-            # If no inpaint areas found, pass frames through unchanged
             inpainted_frames = copy.deepcopy(input_frames)
             
         return inpainted_frames
@@ -123,16 +129,19 @@ class STTNInpaint:
         # Return reference frame index list
         return ref_index
 
-    def inpaint(self, frames: List[np.ndarray], mask: np.ndarray = None):
+    def inpaint(self, frames: List[np.ndarray], mask: np.ndarray = None, masks: List[np.ndarray] = None):
         """
         Use STTN to complete hole filling (holes are masked areas)
 
         :param frames: cropped+scaled frames (model input size)
-        :param mask: binary mask at model input size. The masked region is
-            zeroed in the input so STTN treats it as a hole to reconstruct.
-            Without this the model just re-encodes the visible subtitle text
-            and its temporal attention averages successive subtitles together,
-            producing ghost/double text instead of a clean fill.
+        :param mask: a single binary mask at model input size, broadcast to all
+            frames (legacy / static-mask path).
+        :param masks: optional list of per-frame binary masks at model input
+            size. Takes precedence over `mask`. The masked region of each frame
+            is zeroed so STTN treats it as a hole and fills it from spatial +
+            temporal context, instead of re-encoding the visible text (which
+            would ghost). Per-frame masks let thin moving stroke masks be filled
+            with temporal consistency — clean and flicker-free.
         """
         frame_length = len(frames)
         # Preprocess frames to tensors and normalize
@@ -143,11 +152,14 @@ class STTNInpaint:
         comp_frames = [None] * frame_length
         # Reshape to (frame_length, 3, H, W) for the encoder
         feats = feats.view(frame_length, 3, self.model_input_height, self.model_input_width)
-        # Zero out the subtitle region so the model inpaints it rather than
-        # passing the text through.
-        if mask is not None:
-            # __call__ thresholds the mask to {0,1}; resize interpolation can
-            # introduce fractional edge values, so binarise at 0.5.
+        # Zero out the masked region so the model inpaints it rather than passing
+        # the text through. Resize interpolation can introduce fractional edge
+        # values, so binarise at 0.5.
+        if masks is not None:
+            m = np.stack([(mk > 0.5).astype(np.float32) for mk in masks])  # (t, H, W)
+            m = torch.from_numpy(m).to(self.device).view(frame_length, 1, self.model_input_height, self.model_input_width)
+            feats = feats * (1 - m)
+        elif mask is not None:
             m = torch.from_numpy((mask > 0.5).astype(np.float32)).to(self.device)
             m = m.view(1, 1, self.model_input_height, self.model_input_width)
             feats = feats * (1 - m)

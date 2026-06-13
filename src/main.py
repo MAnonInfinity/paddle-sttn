@@ -1128,6 +1128,7 @@ class SubtitleRemover:
                     frame_to_interval[fn] = (start, end)
 
             current_frame_index = 0
+            sttn_inpaint = None
             print('[Processing] start removing subtitles...')
 
             while True:
@@ -1147,63 +1148,38 @@ class SubtitleRemover:
                     continue
 
                 start_frame_index, end_frame_index = interval_key
-
-                # Only process when we're at the START of an interval
                 if current_frame_index != start_frame_index:
-                    # Should not happen since we jump to end after processing,
-                    # but guard just in case
                     self.video_writer.write(frame)
                     self.update_progress(tbar, increment=1)
                     continue
 
-                # Box mask (only used when stroke masking is disabled)
-                box_mask = None if config.USE_STROKE_MASK else interval_masks.get(interval_key)
-                if not config.USE_STROKE_MASK and box_mask is None:
-                    for _ in range(end_frame_index - start_frame_index + 1):
-                        self.video_writer.write(frame)
-                        self.update_progress(tbar, increment=1)
-                        ret, frame = self.video_cap.read()
-                        if not ret:
-                            break
-                        current_frame_index += 1
-                    continue
+                # Collect the whole interval (chunk) — STTN needs the batch for
+                # temporal consistency. Chunks are already capped at
+                # STTN_MAX_LOAD_NUM so memory stays bounded.
+                frames_batch = [frame]
+                for _ in range(end_frame_index - start_frame_index):
+                    ret, nxt = self.video_cap.read()
+                    if not ret:
+                        break
+                    current_frame_index += 1
+                    frames_batch.append(nxt)
 
-                if self.lama_inpaint is None:
-                    self.lama_inpaint = LamaInpaint()
-
-                print(f'[Processing] interval {start_frame_index}→{end_frame_index}')
-
-                # Process every frame of the interval. Within the band we mask only
-                # the actual text strokes (config.USE_STROKE_MASK) and inpaint just
-                # those with LaMa — a tiny hole the inpainter fills cleanly from
-                # adjacent background, so no grey fill, no ghost, negligible
-                # flicker. A frame with no detected strokes is written untouched.
-                count = end_frame_index - start_frame_index + 1
-                for offset in range(count):
-                    if offset > 0:
-                        ret, frame = self.video_cap.read()
-                        if not ret:
-                            break
-                        current_frame_index += 1
-
-                    if config.USE_STROKE_MASK:
+                # Per-frame stroke masks (only the text pixels). A frame with no
+                # detected strokes gets an empty mask and is left unchanged.
+                if config.USE_STROKE_MASK:
+                    masks_batch = []
+                    for i, f in enumerate(frames_batch):
+                        fn = start_frame_index + i
                         m = self.compute_stroke_mask(
-                            frame, frame_boxes.get(current_frame_index),
-                            self.frame_height, self.frame_width)
-                    else:
-                        m = box_mask
-
-                    if m is None or not m.any():
-                        out = frame  # no subtitle strokes this frame — leave as-is
-                    else:
-                        out = self.lama_inpaint(frame, m)
-                        # Save one stroke-mask overlay for visual verification —
-                        # only on a frame with a substantial mask (a real text
-                        # frame), not an incidental bright speck.
+                            f, frame_boxes.get(fn), self.frame_height, self.frame_width)
+                        if m is None:
+                            m = np.zeros((self.frame_height, self.frame_width), dtype=np.uint8)
+                        masks_batch.append(m)
+                        # Save one stroke-mask overlay on a real text frame.
                         if (not getattr(self, '_stroke_debug_saved', False)
                                 and cv2.countNonZero(m) > 200):
                             try:
-                                ov = frame.copy()
+                                ov = f.copy()
                                 ov[m > 0] = (0, 0, 255)
                                 dbg = os.path.join(os.path.dirname(self.video_out_name),
                                                    f'{self.vd_name}_stroke_debug.png')
@@ -1213,11 +1189,41 @@ class SubtitleRemover:
                             except Exception as e:
                                 print(f'[Stroke] (debug overlay skipped: {e})')
                             self._stroke_debug_saved = True
+                    area_mask = interval_masks[interval_key]  # band box (strip area)
+                else:
+                    masks_batch = None
+                    area_mask = interval_masks.get(interval_key)
+                    if area_mask is None:
+                        for f in frames_batch:
+                            self.video_writer.write(f)
+                            self.update_progress(tbar, increment=1)
+                        continue
 
-                    self.video_writer.write(out)
-                    if self.gui_mode:
-                        self.preview_frame = cv2.hconcat([frame, out])
-                    self.update_progress(tbar, increment=1)
+                print(f'[Processing] interval {start_frame_index}→{end_frame_index} '
+                      f'({len(frames_batch)} frames)')
+
+                if config.STROKE_INPAINTER == 'lama':
+                    # Per-frame spatial inpainting (cleaner stills, but flickers).
+                    if self.lama_inpaint is None:
+                        self.lama_inpaint = LamaInpaint()
+                    for i, f in enumerate(frames_batch):
+                        m = masks_batch[i] if masks_batch is not None else area_mask
+                        out = f if (m is None or not m.any()) else self.lama_inpaint(f, m)
+                        self.video_writer.write(out)
+                        if self.gui_mode:
+                            self.preview_frame = cv2.hconcat([f, out])
+                        self.update_progress(tbar, increment=1)
+                else:
+                    # STTN: temporal, flicker-free. Fills each frame's thin stroke
+                    # holes using the band as context and other frames as reference.
+                    if sttn_inpaint is None:
+                        sttn_inpaint = STTNInpaint()
+                    inpainted = sttn_inpaint(frames_batch, area_mask, frame_masks=masks_batch)
+                    for i, out in enumerate(inpainted):
+                        self.video_writer.write(out)
+                        if self.gui_mode:
+                            self.preview_frame = cv2.hconcat([frames_batch[i], out])
+                        self.update_progress(tbar, increment=1)
 
     def lama_mode(self, tbar):
         print('use lama mode')

@@ -174,6 +174,11 @@ LAMA_SUPER_FAST = False
 # ~10-20x, so the inpainter fills it cleanly from adjacent background with almost
 # no flicker, and per-frame thresholding also recovers frames OCR missed.
 USE_STROKE_MASK = True
+# Inpainter for the stroke masks: 'sttn' (temporal, flicker-free — recommended)
+# or 'lama' (per-frame; cleaner single frames but flickers over time). With thin
+# stroke masks STTN has ample context + temporal references, so it fills cleanly
+# and consistently, unlike the solid-band case where it produced grey.
+STROKE_INPAINTER = 'sttn'
 # Stroke detection runs INSIDE each OCR text box (localised by detection),
 # capturing both the white core and the dark outline of subtitle text via
 # local contrast. Detecting both polarities is what makes it work on any
