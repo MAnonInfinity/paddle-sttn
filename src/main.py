@@ -13,6 +13,25 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from src.tools.common_tools import is_video_or_image, is_image_file
+
+
+def colab_autodownload(path):
+    """
+    Trigger a browser download of `path` when running in Google Colab.
+
+    No-op outside Colab (or if the download API is unavailable), so it is safe
+    to call unconditionally for any debug asset we want pushed to the user's
+    machine automatically — same convenience as the final output download.
+    """
+    try:
+        if 'google.colab' not in sys.modules:
+            return
+        from google.colab import files
+        if path and os.path.exists(path):
+            files.download(path)
+            print(f'[Colab] auto-downloading: {path}')
+    except Exception as e:
+        print(f'[Colab] auto-download skipped for {path}: {e}')
 from src.scenedetect import scene_detect
 from src.scenedetect.detectors import ContentDetector
 from src.inpaint.sttn_inpaint import STTNInpaint, STTNVideoInpaint
@@ -968,6 +987,7 @@ class SubtitleRemover:
                                             f'{self.vd_name}_band_debug.png')
                     cv2.imwrite(dbg_path, dbg_frame)
                     print(f'[Band] Wrote band-overlay debug image: {dbg_path}')
+                    colab_autodownload(dbg_path)
             except Exception as e:
                 print(f'[Band] (debug overlay skipped: {e})')
 

@@ -70,8 +70,14 @@ class STTNInpaint:
 
         # Process each removal part
         for k in range(len(inpaint_area)):
+            # Scale the mask strip to model input size so the subtitle region can
+            # be zeroed out of the input (STTN expects a hole to fill, not the
+            # visible text — feeding the text in causes ghosting).
+            mask_strip = mask[inpaint_area[k][0]:inpaint_area[k][1], :]
+            mask_strip_resized = cv2.resize(
+                mask_strip, (self.model_input_width, self.model_input_height))
             # Call inpaint function for processing
-            comps[k] = self.inpaint(frames_scaled[k])
+            comps[k] = self.inpaint(frames_scaled[k], mask_strip_resized)
 
         # If removal parts exist
         if inpaint_area:
@@ -117,9 +123,16 @@ class STTNInpaint:
         # Return reference frame index list
         return ref_index
 
-    def inpaint(self, frames: List[np.ndarray]):
+    def inpaint(self, frames: List[np.ndarray], mask: np.ndarray = None):
         """
         Use STTN to complete hole filling (holes are masked areas)
+
+        :param frames: cropped+scaled frames (model input size)
+        :param mask: binary mask at model input size. The masked region is
+            zeroed in the input so STTN treats it as a hole to reconstruct.
+            Without this the model just re-encodes the visible subtitle text
+            and its temporal attention averages successive subtitles together,
+            producing ghost/double text instead of a clean fill.
         """
         frame_length = len(frames)
         # Preprocess frames to tensors and normalize
@@ -128,10 +141,20 @@ class STTNInpaint:
         feats = feats.to(self.device)
         # Initialize list of video length to store processed frames
         comp_frames = [None] * frame_length
+        # Reshape to (frame_length, 3, H, W) for the encoder
+        feats = feats.view(frame_length, 3, self.model_input_height, self.model_input_width)
+        # Zero out the subtitle region so the model inpaints it rather than
+        # passing the text through.
+        if mask is not None:
+            # __call__ thresholds the mask to {0,1}; resize interpolation can
+            # introduce fractional edge values, so binarise at 0.5.
+            m = torch.from_numpy((mask > 0.5).astype(np.float32)).to(self.device)
+            m = m.view(1, 1, self.model_input_height, self.model_input_width)
+            feats = feats * (1 - m)
         # Disable gradient calculation for inference efficiency
         with torch.no_grad():
             # Pass processed frames through encoder to generate feature representation
-            feats = self.model.encoder(feats.view(frame_length, 3, self.model_input_height, self.model_input_width))
+            feats = self.model.encoder(feats)
             # Get feature dimension info
             _, c, feat_h, feat_w = feats.size()
             # Reshape features to match model's expected input
@@ -341,7 +364,11 @@ class STTNVideoInpaint:
                 # Run inpaint for each region
                 for k in range(len(inpaint_area)):
                     if len(frames[k]) > 0:  # Ensure frames are available to process
-                        comps[k] = self.sttn_inpaint.inpaint(frames[k])
+                        # Zero the subtitle region in the input (see STTNInpaint.inpaint)
+                        mask_strip = mask[inpaint_area[k][0]:inpaint_area[k][1], :]
+                        mask_strip_resized = cv2.resize(
+                            mask_strip, (self.sttn_inpaint.model_input_width, self.sttn_inpaint.model_input_height))
+                        comps[k] = self.sttn_inpaint.inpaint(frames[k], mask_strip_resized)
                     else:
                         comps[k] = []
                 
