@@ -1,7 +1,9 @@
 import os
 # Reduce CUDA fragmentation (helps fit ProPainter on smaller GPUs like the T4).
-# Must be set before torch initialises CUDA.
+# Must be set before torch initialises CUDA. Set both the current and legacy
+# env-var names (PyTorch renamed it).
 os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+os.environ.setdefault('PYTORCH_ALLOC_CONF', 'expandable_segments:True')
 import torch
 import shutil
 import subprocess
@@ -1306,25 +1308,38 @@ class SubtitleRemover:
                             continue
                         if use_pp:
                             try:
-                                if pp_strip is not None:
-                                    sy0, sy1 = pp_strip
-                                    crop_f = [f[sy0:sy1, :] for f in sub_f]
-                                    if sub_m is not None:
-                                        mask_arg = [mm[sy0:sy1, :] for mm in sub_m]
-                                    else:
-                                        mask_arg = area_mask[sy0:sy1, :]
-                                    outs = self.video_inpaint.inpaint(crop_f, mask_arg)
-                                    for k, o in enumerate(outs):
-                                        full = sub_f[k]
-                                        if o.shape[0] != (sy1 - sy0) or o.shape[1] != self.size[0]:
-                                            o = cv2.resize(o, (self.size[0], sy1 - sy0))
-                                        full[sy0:sy1, :] = o
-                                        _write(full, sub_f[k])
+                                torch.cuda.empty_cache()
+                                # Region ProPainter actually processes: band strip
+                                # (full width) or whole frame.
+                                sy0, sy1 = pp_strip if pp_strip is not None else (0, self.frame_height)
+                                strip_h, strip_w = sy1 - sy0, self.size[0]
+                                # Downscale target, snapped to multiples of 8.
+                                sc = config.PROPAINTER_SCALE
+                                dw = max(8, int(round(strip_w * sc / 8)) * 8)
+                                dh = max(8, int(round(strip_h * sc / 8)) * 8)
+
+                                crop_f = [cv2.resize(f[sy0:sy1, :], (dw, dh)) for f in sub_f]
+                                if sub_m is not None:
+                                    mask_arg = [cv2.resize(mm[sy0:sy1, :], (dw, dh),
+                                                           interpolation=cv2.INTER_NEAREST) for mm in sub_m]
                                 else:
-                                    mask_arg = sub_m if sub_m is not None else area_mask
-                                    outs = self.video_inpaint.inpaint(sub_f, mask_arg)
-                                    for k, o in enumerate(outs):
-                                        _write(o, sub_f[k])
+                                    mask_arg = cv2.resize(area_mask[sy0:sy1, :], (dw, dh),
+                                                          interpolation=cv2.INTER_NEAREST)
+                                outs = self.video_inpaint.inpaint(crop_f, mask_arg)
+
+                                for k, o in enumerate(outs):
+                                    o_up = cv2.resize(o, (strip_w, strip_h))
+                                    full = sub_f[k]
+                                    region = full[sy0:sy1, :]
+                                    if sub_m is not None:
+                                        sm = sub_m[k][sy0:sy1, :]
+                                        # Composite ONLY the text strokes — the soft
+                                        # upscaled fill stays confined to them.
+                                        idx = sm > 0
+                                        region[idx] = o_up[idx]
+                                    else:
+                                        full[sy0:sy1, :] = o_up
+                                    _write(full, sub_f[k])
                                 i0 += len(sub_f)
                             except RuntimeError as e:
                                 torch.cuda.empty_cache()

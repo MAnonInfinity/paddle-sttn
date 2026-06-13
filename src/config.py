@@ -184,14 +184,16 @@ USE_STROKE_MASK = True
 # - 'sttn': temporal, but grey-fills static subtitles (same pixels masked every
 #   frame → no reference). Do not use for static-position subtitles.
 STROKE_INPAINTER = 'propainter'
-# ProPainter frames per batch. Lower if you hit CUDA OOM. With band-strip
-# cropping (below) the T4 fits a decent batch; drop this first if OOM persists.
-PROPAINTER_SUB_VIDEO_LENGTH = 16
+# ProPainter frames per batch. Lower if you hit CUDA OOM.
+PROPAINTER_SUB_VIDEO_LENGTH = 10
 # Run ProPainter only on a horizontal strip around the subtitle band (full width,
-# this many pixels above/below the band) instead of the whole frame. Subtitles
-# live in the band, so this cuts pixels — and VRAM — several-fold with no quality
-# loss where it matters. Set None to process the whole frame.
+# this many pixels above/below the band). Set None to process the whole frame.
 PROPAINTER_BAND_MARGIN = 48
+# Downscale factor for ProPainter processing (the heaviest VRAM lever — memory
+# scales with the square of resolution). The inpainted result is upscaled and
+# only the thin text strokes are composited back, so the softening is confined to
+# the strokes; the rest of the band stays the sharp original. 1.0 = no downscale.
+PROPAINTER_SCALE = 0.5
 # Temporal mask stabilisation (frames each side): the per-frame stroke mask is
 # OR-ed with its neighbours' masks so the inpainted region stops shifting
 # frame-to-frame. Mask jitter is the main source of LaMa flicker; a stable
