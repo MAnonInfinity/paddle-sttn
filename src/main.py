@@ -882,8 +882,9 @@ class SubtitleRemover:
             dark = cv2.adaptiveThreshold(
                 gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block, C)
             m = cv2.bitwise_or(bright, dark)
-            # Bridge core+outline into solid glyphs, then grow slightly.
-            m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel, iterations=2)
+            # Bridge core+outline, then grow slightly. Keep close light so glyphs
+            # don't merge into a solid bar (smaller hole = less visible fill).
+            m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel, iterations=1)
             if config.STROKE_DILATE_PIXELS > 0:
                 m = cv2.dilate(m, kernel, iterations=config.STROKE_DILATE_PIXELS)
 
@@ -1104,22 +1105,33 @@ class SubtitleRemover:
                        if b_ymin <= (b[2] + b[3]) / 2 <= b_ymax]
                 return out or None
 
+            # Frames with their own in-band detection
+            detected_band = {fn: boxes_in_band(fn) for s, e in continuous_frame_no_list
+                             for fn in range(s, e + 1)}
+            detected_band = {fn: b for fn, b in detected_band.items() if b is not None}
+            det_frames_sorted = sorted(detected_band.keys())
+
+            # Assign each frame the nearest detection's boxes, but only if within
+            # STROKE_PROPAGATE_MAX_GAP frames — beyond that the frame likely has no
+            # subtitle, so leave it untouched (None).
+            import bisect
             frame_boxes = {}
+            gap = config.STROKE_PROPAGATE_MAX_GAP
             for s, e in continuous_frame_no_list:
-                last = None
                 for fn in range(s, e + 1):
-                    cur = boxes_in_band(fn)
-                    if cur is not None:
-                        last = cur
-                    frame_boxes[fn] = last
-                # back-fill any leading gap before the first detection
-                first = next((boxes_in_band(fn) for fn in range(s, e + 1)
-                              if boxes_in_band(fn) is not None), None)
-                for fn in range(s, e + 1):
-                    if frame_boxes[fn] is None:
-                        frame_boxes[fn] = first
-                    else:
-                        break
+                    if fn in detected_band:
+                        frame_boxes[fn] = detected_band[fn]
+                        continue
+                    if not det_frames_sorted:
+                        frame_boxes[fn] = None
+                        continue
+                    i = bisect.bisect_left(det_frames_sorted, fn)
+                    nearest = None
+                    if i < len(det_frames_sorted):
+                        nearest = det_frames_sorted[i]
+                    if i > 0 and (nearest is None or fn - det_frames_sorted[i-1] <= nearest - fn):
+                        nearest = det_frames_sorted[i-1]
+                    frame_boxes[fn] = detected_band[nearest] if (nearest is not None and abs(nearest - fn) <= gap) else None
 
             # Build a fast lookup: frame_no → (start, end) of its interval
             frame_to_interval = {}
@@ -1189,6 +1201,21 @@ class SubtitleRemover:
                             except Exception as e:
                                 print(f'[Stroke] (debug overlay skipped: {e})')
                             self._stroke_debug_saved = True
+
+                    # Temporal stabilisation: OR each frame's mask with its
+                    # neighbours so the inpainted region stops jittering
+                    # frame-to-frame (the main source of LaMa flicker).
+                    w = config.STROKE_TEMPORAL_WINDOW
+                    if w > 0 and len(masks_batch) > 1:
+                        stabilised = []
+                        n = len(masks_batch)
+                        for i in range(n):
+                            acc = masks_batch[i].copy()
+                            for j in range(max(0, i - w), min(n, i + w + 1)):
+                                if j != i:
+                                    acc = cv2.bitwise_or(acc, masks_batch[j])
+                            stabilised.append(acc)
+                        masks_batch = stabilised
                     area_mask = interval_masks[interval_key]  # band box (strip area)
                 else:
                     masks_batch = None

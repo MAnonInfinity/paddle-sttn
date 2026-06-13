@@ -174,11 +174,21 @@ LAMA_SUPER_FAST = False
 # ~10-20x, so the inpainter fills it cleanly from adjacent background with almost
 # no flicker, and per-frame thresholding also recovers frames OCR missed.
 USE_STROKE_MASK = True
-# Inpainter for the stroke masks: 'sttn' (temporal, flicker-free — recommended)
-# or 'lama' (per-frame; cleaner single frames but flickers over time). With thin
-# stroke masks STTN has ample context + temporal references, so it fills cleanly
-# and consistently, unlike the solid-band case where it produced grey.
-STROKE_INPAINTER = 'sttn'
+# Inpainter for the stroke masks:
+# - 'lama': per-frame spatial inpainting. Always fills from real surrounding
+#   pixels, so it NEVER leaves grey holes. Default.
+# - 'sttn': temporal, but it grey-fills here — for one subtitle line the same
+#   stroke pixels are masked in every frame it spans, so STTN has no clean
+#   reference and outputs flat grey. Do not use for static-position subtitles.
+STROKE_INPAINTER = 'lama'
+# Temporal mask stabilisation (frames each side): the per-frame stroke mask is
+# OR-ed with its neighbours' masks so the inpainted region stops shifting
+# frame-to-frame. Mask jitter is the main source of LaMa flicker; a stable
+# region over a near-static background gives a near-stable fill. 0 disables.
+STROKE_TEMPORAL_WINDOW = 2
+# Don't propagate OCR boxes to frames further than this many frames from a real
+# detection — avoids masking background on long no-text stretches.
+STROKE_PROPAGATE_MAX_GAP = 6
 # Stroke detection runs INSIDE each OCR text box (localised by detection),
 # capturing both the white core and the dark outline of subtitle text via
 # local contrast. Detecting both polarities is what makes it work on any
