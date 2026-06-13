@@ -184,7 +184,7 @@ USE_STROKE_MASK = True
 #   only fits downscaled → soft fills. Heaviest VRAM.
 # - 'lama': per-frame spatial inpainting. Never grey, but flickers.
 # - 'sttn': grey-fills static subtitles (no temporal reference). Avoid.
-STROKE_INPAINTER = 'plate'
+STROKE_INPAINTER = 'lama'
 # 'plate' mode: a band pixel's median is trusted only if it has at least this many
 # stroke-free samples in the chunk and its temporal std is below the threshold
 # (i.e. the background there is actually static). Otherwise LaMa fills it.
