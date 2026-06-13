@@ -1092,14 +1092,18 @@ class SubtitleRemover:
             ]
             dropped = len(scene_segments) - len(kept_segments)
 
-            # Tile each kept segment into chunks no larger than STTN_MAX_LOAD_NUM
-            # so we never hold more than one batch of frames in memory, and STTN
-            # never references across a scene cut (segments are already cut-bounded).
+            # Tile each kept segment into chunks. For 'plate' the chunk should span
+            # the whole scene so the subtitle text changes within it (different
+            # words cover different pixels) and almost every band pixel is revealed
+            # in some frame → a sharp median plate with little LaMa fallback. Other
+            # inpainters stay capped at STTN_MAX_LOAD_NUM for bounded GPU memory.
+            chunk_cap = (config.PLATE_CHUNK_MAX if config.STROKE_INPAINTER == 'plate'
+                         else config.STTN_MAX_LOAD_NUM)
             continuous_frame_no_list = []
             for s, e in kept_segments:
                 cur = s
                 while cur <= e:
-                    chunk_end = min(cur + config.STTN_MAX_LOAD_NUM - 1, e)
+                    chunk_end = min(cur + chunk_cap - 1, e)
                     continuous_frame_no_list.append((cur, chunk_end))
                     cur = chunk_end + 1
 

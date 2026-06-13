@@ -190,6 +190,10 @@ STROKE_INPAINTER = 'plate'
 # (i.e. the background there is actually static). Otherwise LaMa fills it.
 PLATE_MIN_SAMPLES = 3
 PLATE_STD_THRESH = 16
+# 'plate' processes a whole scene at once (capped here) so the subtitle text
+# changes within the window and most band pixels get revealed. Holds this many
+# frames in RAM at once; lower if memory is tight on very long scenes.
+PLATE_CHUNK_MAX = 600
 # ProPainter frames per batch. Lower if you hit CUDA OOM.
 PROPAINTER_SUB_VIDEO_LENGTH = 10
 # Run ProPainter only on a horizontal strip around the subtitle band (full width,
