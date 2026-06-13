@@ -6,6 +6,7 @@ from pathlib import Path
 import threading
 import cv2
 import sys
+import numpy as np
 from functools import cached_property
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -305,6 +306,95 @@ class SubtitleDetect:
             return unified_regions
         else:
             return raw_regions
+
+    def compute_dominant_subtitle_band(self, subtitle_frame_no_box_dict, frame_height, frame_width):
+        """
+        Find the single stable band where subtitles live by aggregating every
+        OCR box across the whole video.
+
+        Per-frame OCR is leaky — it misses fades, motion-blur and low-contrast
+        frames, and those missed frames get written out untouched (leftover
+        subtitles). Locating the band ONCE from all detections is far more
+        robust than trusting per-frame boxes: OCR only has to find the band's
+        position somewhere in the video, not in every single frame.
+
+        Returns (xmin, xmax, ymin, ymax) in pixels, or None if no usable boxes.
+        """
+        boxes = []
+        for box_list in subtitle_frame_no_box_dict.values():
+            for xmin, xmax, ymin, ymax in box_list:
+                w, h = xmax - xmin, ymax - ymin
+                if w <= 0 or h <= 0:
+                    continue
+                # Subtitle text is wider than tall — drop tall blocks
+                # (vertical CJK columns, logos, stacked UI text).
+                if h - w > config.THRESHOLD_HEIGHT_WIDTH_DIFFERENCE:
+                    continue
+                boxes.append((xmin, xmax, ymin, ymax))
+
+        if not boxes:
+            return None
+
+        arr = np.array(boxes, dtype=np.float32)
+        y_centers = (arr[:, 2] + arr[:, 3]) / 2.0
+
+        # Histogram the vertical centres; the densest region is the subtitle
+        # band. This rejects stray detections elsewhere on screen (signs, HUD).
+        nbins = max(8, frame_height // 40)
+        hist, edges = np.histogram(y_centers, bins=nbins, range=(0, frame_height))
+        peak = int(np.argmax(hist))
+        thresh = hist[peak] * 0.15  # bins with <15% of peak density are noise
+
+        lo = peak
+        while lo > 0 and hist[lo - 1] >= thresh:
+            lo -= 1
+        hi = peak
+        while hi < len(hist) - 1 and hist[hi + 1] >= thresh:
+            hi += 1
+
+        band_lo_y, band_hi_y = edges[lo], edges[hi + 1]
+        centred = (y_centers >= band_lo_y) & (y_centers <= band_hi_y)
+        in_band = arr[centred] if centred.any() else arr
+
+        # x: use the full extent of in-band lines so long subtitle lines are
+        # never clipped. y: light percentiles to keep the band tight against
+        # stray tall/short detections inside the band.
+        xmin = int(in_band[:, 0].min())
+        xmax = int(in_band[:, 1].max())
+        ymin = int(np.percentile(in_band[:, 2], 2))
+        ymax = int(np.percentile(in_band[:, 3], 98))
+
+        PAD = config.SUBTITLE_AREA_DEVIATION_PIXEL
+        xmin = max(0, xmin - PAD)
+        xmax = min(frame_width, xmax + PAD)
+        ymin = max(0, ymin - PAD)
+        ymax = min(frame_height, ymax + PAD)
+        return (xmin, xmax, ymin, ymax)
+
+    @staticmethod
+    def build_active_intervals(frame_nos, max_gap):
+        """
+        Merge detected subtitle frame numbers into intervals, bridging gaps no
+        larger than max_gap frames.
+
+        OCR drops occasional frames inside a continuous dialogue stretch.
+        Bridging those short gaps means a single missed frame no longer breaks
+        an interval (and no longer survives as a leftover subtitle), because
+        the whole bridged stretch is inpainted with the stable band mask.
+        """
+        nums = sorted(frame_nos)
+        if not nums:
+            return []
+        intervals = []
+        start = prev = nums[0]
+        for n in nums[1:]:
+            if n - prev <= max_gap:
+                prev = n
+            else:
+                intervals.append((start, prev))
+                start = prev = n
+        intervals.append((start, prev))
+        return intervals
 
     @staticmethod
     def find_continuous_ranges(subtitle_frame_no_box_dict):
@@ -843,8 +933,33 @@ class SubtitleRemover:
                     print('[Warning] Output video will be a copy of the input (no processing done).')
                 return
 
-            # Build intervals from the detected frames
-            continuous_frame_no_list = self.sub_detector.find_continuous_ranges_with_same_mask(sub_list)
+            # --- Dominant-band + gap-bridging approach ---
+            # Root cause of leftover subtitles: per-frame OCR misses frames, and
+            # missed frames were written out untouched. We fix that on two axes:
+            #
+            #   1. SPATIAL: derive ONE stable band from all detections across the
+            #      whole video, and inpaint that same band on every active frame —
+            #      so a frame where OCR blinked still gets cleaned.
+            #   2. TEMPORAL: build active intervals by bridging short OCR gaps, so
+            #      a dropped frame inside a dialogue stretch no longer survives.
+
+            band = self.sub_detector.compute_dominant_subtitle_band(
+                sub_list, self.frame_height, self.frame_width)
+            if band is None:
+                print('[Warning] Could not derive a subtitle band from detections.')
+                print('[Warning] Output video will be a copy of the input (no processing done).')
+                return
+            b_xmin, b_xmax, b_ymin, b_ymax = band
+            print(f'[Band] Dominant subtitle band (x {b_xmin}-{b_xmax}, '
+                  f'y {b_ymin}-{b_ymax}) from {len(sub_list)} detected frames.')
+            unified_mask = create_mask(self.mask_size, [band])
+
+            # Build active intervals, bridging OCR gaps up to ~1s of frames so
+            # isolated misses don't break a continuous subtitle stretch.
+            gap_frames = max(int(self.fps), 12) if self.fps and self.fps > 0 else 15
+            continuous_frame_no_list = self.sub_detector.build_active_intervals(
+                list(sub_list.keys()), gap_frames)
+            # Ensure each interval is long enough for STTN's reference sampling.
             continuous_frame_no_list = self.sub_detector.expand_and_merge_intervals(continuous_frame_no_list)
             continuous_frame_no_list = self.sub_detector.filter_and_merge_intervals(continuous_frame_no_list)
 
@@ -860,46 +975,11 @@ class SubtitleRemover:
                 print(f'[Scene] {len(scene_div_points)} scene cuts → split '
                       f'{before} into {len(continuous_frame_no_list)} intervals.')
 
-            print(f'[Detection] Found {len(sub_list)} subtitle frames across '
-                  f'{len(continuous_frame_no_list)} intervals.')
+            print(f'[Detection] {len(sub_list)} subtitle frames bridged into '
+                  f'{len(continuous_frame_no_list)} active intervals (gap<={gap_frames}).')
 
-            # --- Per-interval unified mask approach ---
-            # For each interval we collect every OCR box detected in any frame of
-            # that interval and compute their envelope (union bounding box + padding).
-            # That one stable rectangle becomes the mask for the whole interval.
-            #
-            # Why this beats both previous approaches:
-            #   Global mask  → wastes compute on areas with no text in that scene
-            #   Per-batch varying mask → ghost text, inconsistent across video lengths
-            #   Per-interval envelope → exactly as big as needed, no ghost text ✅
-
-            PAD = config.SUBTITLE_AREA_DEVIATION_PIXEL
-
-            # Pre-compute the unified mask for each interval
-            interval_masks = {}
-            for start, end in continuous_frame_no_list:
-                mask_coords = []
-                for frame_no in range(start, end + 1):
-                    if frame_no not in sub_list:
-                        continue
-                    for xmin, xmax, ymin, ymax in sub_list[frame_no]:
-                        # Skip false-positive tall boxes (non-subtitle text)
-                        if (ymax - ymin) - (xmax - xmin) > config.THRESHOLD_HEIGHT_WIDTH_DIFFERENCE:
-                            continue
-                        # Use individual box with padding
-                        box_xmin = max(0, xmin - PAD)
-                        box_xmax = min(self.frame_width, xmax + PAD)
-                        box_ymin = max(0, ymin - PAD)
-                        box_ymax = min(self.frame_height, ymax + PAD)
-                        mask_coords.append((box_xmin, box_xmax, box_ymin, box_ymax))
-
-                if not mask_coords:
-                    # Interval had only filtered-out boxes — skip it
-                    interval_masks[(start, end)] = None
-                    continue
-
-                interval_masks[(start, end)] = create_mask(self.mask_size, mask_coords)
-                print(f'  Interval [{start}-{end}]: generated unified mask containing {len(mask_coords)} boxes')
+            # Every active interval uses the same stable band mask.
+            interval_masks = {key: unified_mask for key in continuous_frame_no_list}
 
             # Build a fast lookup: frame_no → (start, end) of its interval
             frame_to_interval = {}
