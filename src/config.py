@@ -175,12 +175,18 @@ LAMA_SUPER_FAST = False
 # no flicker, and per-frame thresholding also recovers frames OCR missed.
 USE_STROKE_MASK = True
 # Inpainter for the stroke masks:
-# - 'lama': per-frame spatial inpainting. Always fills from real surrounding
-#   pixels, so it NEVER leaves grey holes. Default.
-# - 'sttn': temporal, but it grey-fills here — for one subtitle line the same
-#   stroke pixels are masked in every frame it spans, so STTN has no clean
-#   reference and outputs flat grey. Do not use for static-position subtitles.
-STROKE_INPAINTER = 'lama'
+# - 'propainter': flow-based video inpainting. Propagates REAL background across
+#   frames along optical flow → temporally coherent (no flicker) and no grey.
+#   Best quality; heaviest VRAM. Recommended if it fits.
+# - 'lama': per-frame spatial inpainting. Never grey, but re-hallucinates each
+#   frame independently → flickers. Used as the automatic fallback if ProPainter
+#   runs out of memory.
+# - 'sttn': temporal, but grey-fills static subtitles (same pixels masked every
+#   frame → no reference). Do not use for static-position subtitles.
+STROKE_INPAINTER = 'propainter'
+# ProPainter frames per batch. Lower if you hit CUDA OOM (T4 16GB fits ~24-32 at
+# 720x1280). Smaller = less VRAM but slightly less temporal context per batch.
+PROPAINTER_SUB_VIDEO_LENGTH = 24
 # Temporal mask stabilisation (frames each side): the per-frame stroke mask is
 # OR-ed with its neighbours' masks so the inpainted region stops shifting
 # frame-to-frame. Mask jitter is the main source of LaMa flicker; a stable

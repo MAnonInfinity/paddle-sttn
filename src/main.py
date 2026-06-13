@@ -1229,28 +1229,65 @@ class SubtitleRemover:
                 print(f'[Processing] interval {start_frame_index}→{end_frame_index} '
                       f'({len(frames_batch)} frames)')
 
-                if config.STROKE_INPAINTER == 'lama':
-                    # Per-frame spatial inpainting (cleaner stills, but flickers).
+                def _write(out, src):
+                    if out.shape[1] != self.size[0] or out.shape[0] != self.size[1]:
+                        out = cv2.resize(out, self.size)
+                    self.video_writer.write(out)
+                    if self.gui_mode:
+                        self.preview_frame = cv2.hconcat([src, out])
+                    self.update_progress(tbar, increment=1)
+
+                def _lama_batch(sub_f, sub_m):
                     if self.lama_inpaint is None:
                         self.lama_inpaint = LamaInpaint()
-                    for i, f in enumerate(frames_batch):
-                        m = masks_batch[i] if masks_batch is not None else area_mask
+                    for k, f in enumerate(sub_f):
+                        m = sub_m[k] if sub_m is not None else area_mask
                         out = f if (m is None or not m.any()) else self.lama_inpaint(f, m)
-                        self.video_writer.write(out)
-                        if self.gui_mode:
-                            self.preview_frame = cv2.hconcat([f, out])
-                        self.update_progress(tbar, increment=1)
-                else:
-                    # STTN: temporal, flicker-free. Fills each frame's thin stroke
-                    # holes using the band as context and other frames as reference.
+                        _write(out, f)
+
+                if config.STROKE_INPAINTER == 'sttn':
+                    # (Kept for reference; grey-fills static subtitles — not advised.)
                     if sttn_inpaint is None:
                         sttn_inpaint = STTNInpaint()
-                    inpainted = sttn_inpaint(frames_batch, area_mask, frame_masks=masks_batch)
-                    for i, out in enumerate(inpainted):
-                        self.video_writer.write(out)
-                        if self.gui_mode:
-                            self.preview_frame = cv2.hconcat([frames_batch[i], out])
-                        self.update_progress(tbar, increment=1)
+                    for i, out in enumerate(sttn_inpaint(frames_batch, area_mask, frame_masks=masks_batch)):
+                        _write(out, frames_batch[i])
+                else:
+                    # ProPainter (flow-based, temporally coherent) with automatic
+                    # LaMa fallback per sub-batch on CUDA OOM. LaMa alone if the
+                    # inpainter is configured to 'lama' or ProPainter init fails.
+                    use_pp = (config.STROKE_INPAINTER == 'propainter')
+                    if use_pp and self.video_inpaint is None:
+                        try:
+                            self.video_inpaint = VideoInpaint(config.PROPAINTER_SUB_VIDEO_LENGTH)
+                        except Exception as e:
+                            print(f'[ProPainter] init failed ({e}); using LaMa.')
+                            use_pp = False
+                    pp_len = max(2, config.PROPAINTER_SUB_VIDEO_LENGTH)
+                    i0 = 0
+                    while i0 < len(frames_batch):
+                        step = pp_len if use_pp else 1
+                        sub_f = frames_batch[i0:i0 + step]
+                        sub_m = masks_batch[i0:i0 + step] if masks_batch is not None else None
+                        # Skip inpainting if every frame in this sub-batch is empty.
+                        if sub_m is not None and not any(mm.any() for mm in sub_m):
+                            for f in sub_f:
+                                _write(f, f)
+                            i0 += len(sub_f)
+                            continue
+                        if use_pp:
+                            try:
+                                mask_arg = sub_m if sub_m is not None else area_mask
+                                outs = self.video_inpaint.inpaint(sub_f, mask_arg)
+                                for k, o in enumerate(outs):
+                                    _write(o, sub_f[k])
+                                i0 += len(sub_f)
+                            except RuntimeError as e:
+                                torch.cuda.empty_cache()
+                                print(f'[ProPainter] OOM/error ({e}); falling back to LaMa.')
+                                use_pp = False  # reprocess this batch with LaMa next loop
+                        else:
+                            _lama_batch(sub_f, sub_m)
+                            i0 += len(sub_f)
 
     def lama_mode(self, tbar):
         print('use lama mode')

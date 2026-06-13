@@ -34,6 +34,9 @@ def read_mask(mpath, length, size, flow_mask_dilates=8, mask_dilates=5):
     # If passed directly as numpy array
     if isinstance(mpath, np.ndarray):
         masks_img = [Image.fromarray(mpath)]
+    # list/tuple of per-frame numpy masks
+    elif isinstance(mpath, (list, tuple)) and len(mpath) > 0 and isinstance(mpath[0], np.ndarray):
+        masks_img = [Image.fromarray(m) for m in mpath]
     # input single img path
     else:
         if isinstance(mpath, str):
