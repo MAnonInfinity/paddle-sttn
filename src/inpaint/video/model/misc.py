@@ -67,9 +67,9 @@ IS_HIGH_VERSION = get_version_numbers(torch.__version__) >= [1, 12, 0]
 
 def gpu_is_available():
     if IS_HIGH_VERSION:
-        if torch.srcs.mps.is_available():
+        if torch.backends.mps.is_available():
             return True
-    return True if torch.cuda.is_available() and torch.srcs.cudnn.is_available() else False
+    return True if torch.cuda.is_available() and torch.backends.cudnn.is_available() else False
 
 
 def get_device(gpu_id=None):
@@ -81,9 +81,9 @@ def get_device(gpu_id=None):
         raise TypeError('Input should be int value.')
 
     if IS_HIGH_VERSION:
-        if torch.srcs.mps.is_available():
+        if torch.backends.mps.is_available():
             return torch.device('mps'+gpu_str)
-    return torch.device('cuda'+gpu_str if torch.cuda.is_available() and torch.srcs.cudnn.is_available() else 'cpu')
+    return torch.device('cuda'+gpu_str if torch.cuda.is_available() and torch.backends.cudnn.is_available() else 'cpu')
 
 
 def set_random_seed(seed):
