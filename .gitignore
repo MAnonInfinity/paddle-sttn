@@ -377,3 +377,6 @@ test*_no_sub*.mp4
 /test/debug/
 /src/tools/train/release_model/
 model.onnx
+
+# Local agent instructions — not for the repo
+CLAUDE.md

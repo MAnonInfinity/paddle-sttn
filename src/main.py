@@ -847,6 +847,19 @@ class SubtitleRemover:
             continuous_frame_no_list = self.sub_detector.find_continuous_ranges_with_same_mask(sub_list)
             continuous_frame_no_list = self.sub_detector.expand_and_merge_intervals(continuous_frame_no_list)
             continuous_frame_no_list = self.sub_detector.filter_and_merge_intervals(continuous_frame_no_list)
+
+            # Split intervals at scene-cut boundaries. STTN reconstructs masked
+            # regions from neighbouring frames; if an interval spans a hard cut,
+            # it pulls reference pixels from a different scene → ghosting/garbage
+            # fill. Done last so the earlier expansion can't re-cross a cut.
+            scene_div_points = self.sub_detector.get_scene_div_frame_no(self.video_path)
+            if scene_div_points:
+                before = len(continuous_frame_no_list)
+                continuous_frame_no_list = self.sub_detector.split_range_by_scene(
+                    continuous_frame_no_list, scene_div_points)
+                print(f'[Scene] {len(scene_div_points)} scene cuts → split '
+                      f'{before} into {len(continuous_frame_no_list)} intervals.')
+
             print(f'[Detection] Found {len(sub_list)} subtitle frames across '
                   f'{len(continuous_frame_no_list)} intervals.')
 
