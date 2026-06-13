@@ -1,7 +1,10 @@
+import os
+# Reduce CUDA fragmentation (helps fit ProPainter on smaller GPUs like the T4).
+# Must be set before torch initialises CUDA.
+os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 import torch
 import shutil
 import subprocess
-import os
 from pathlib import Path
 import threading
 import cv2
@@ -1012,6 +1015,18 @@ class SubtitleRemover:
                     print('[Warning] Output video will be a copy of the input (no processing done).')
                 return
 
+            # Detection is done — release PaddleOCR's GPU pool so the inpainter
+            # (especially ProPainter) has VRAM headroom.
+            try:
+                import gc
+                self.sub_detector.__dict__.pop('text_detector', None)
+                gc.collect()
+                import paddle
+                paddle.device.cuda.empty_cache()
+            except Exception as e:
+                print(f'[Mem] paddle cache release skipped: {e}')
+            torch.cuda.empty_cache()
+
             # --- Dominant-band + gap-bridging approach ---
             # Root cause of leftover subtitles: per-frame OCR misses frames, and
             # missed frames were written out untouched. We fix that on two axes:
@@ -1141,6 +1156,21 @@ class SubtitleRemover:
 
             current_frame_index = 0
             sttn_inpaint = None
+
+            # ProPainter strip: run flow-based inpainting only on a horizontal band
+            # around the subtitles (full width) to keep VRAM in budget. Height
+            # snapped to a multiple of 8 (model requirement). None = whole frame.
+            pp_strip = None
+            if config.PROPAINTER_BAND_MARGIN is not None:
+                m = config.PROPAINTER_BAND_MARGIN
+                y0 = max(0, b_ymin - m)
+                y1 = min(self.frame_height, b_ymax + m)
+                y0 -= (y1 - y0) % 8
+                y0 = max(0, y0)
+                pp_strip = (y0, y1)
+                print(f'[ProPainter] band strip rows {y0}-{y1} '
+                      f'({y1 - y0}px of {self.frame_height}).')
+
             print('[Processing] start removing subtitles...')
 
             while True:
@@ -1276,10 +1306,25 @@ class SubtitleRemover:
                             continue
                         if use_pp:
                             try:
-                                mask_arg = sub_m if sub_m is not None else area_mask
-                                outs = self.video_inpaint.inpaint(sub_f, mask_arg)
-                                for k, o in enumerate(outs):
-                                    _write(o, sub_f[k])
+                                if pp_strip is not None:
+                                    sy0, sy1 = pp_strip
+                                    crop_f = [f[sy0:sy1, :] for f in sub_f]
+                                    if sub_m is not None:
+                                        mask_arg = [mm[sy0:sy1, :] for mm in sub_m]
+                                    else:
+                                        mask_arg = area_mask[sy0:sy1, :]
+                                    outs = self.video_inpaint.inpaint(crop_f, mask_arg)
+                                    for k, o in enumerate(outs):
+                                        full = sub_f[k]
+                                        if o.shape[0] != (sy1 - sy0) or o.shape[1] != self.size[0]:
+                                            o = cv2.resize(o, (self.size[0], sy1 - sy0))
+                                        full[sy0:sy1, :] = o
+                                        _write(full, sub_f[k])
+                                else:
+                                    mask_arg = sub_m if sub_m is not None else area_mask
+                                    outs = self.video_inpaint.inpaint(sub_f, mask_arg)
+                                    for k, o in enumerate(outs):
+                                        _write(o, sub_f[k])
                                 i0 += len(sub_f)
                             except RuntimeError as e:
                                 torch.cuda.empty_cache()
