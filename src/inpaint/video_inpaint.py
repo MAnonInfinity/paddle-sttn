@@ -141,9 +141,9 @@ class VideoInpaint:
             self.use_half = False
         # Length of sub-video for long video inference.
         self.sub_video_length = sub_video_length
-        # Length of local neighboring frames. Smaller = less VRAM per model step
-        # (the per-step allocation, not batch size, drives the peak on small GPUs).
-        self.neighbor_length = 6
+        # Length of local neighboring frames. 10 is ProPainter's default; gives
+        # the best temporal context. Lower to 6 only if VRAM-constrained.
+        self.neighbor_length = 10
         # Mask dilation for video and flow masking
         self.mask_dilation = 4
         # Stride of global reference frames

@@ -184,7 +184,7 @@ USE_STROKE_MASK = True
 #   only fits downscaled → soft fills. Heaviest VRAM.
 # - 'lama': per-frame spatial inpainting. Never grey, but flickers.
 # - 'sttn': grey-fills static subtitles (no temporal reference). Avoid.
-STROKE_INPAINTER = 'lama'
+STROKE_INPAINTER = 'propainter'
 # 'plate' mode: a band pixel's median is trusted only if it has at least this many
 # stroke-free samples in the chunk and its temporal std is below the threshold
 # (i.e. the background there is actually static). Otherwise LaMa fills it.
@@ -194,16 +194,16 @@ PLATE_STD_THRESH = 16
 # changes within the window and most band pixels get revealed. Holds this many
 # frames in RAM at once; lower if memory is tight on very long scenes.
 PLATE_CHUNK_MAX = 600
-# ProPainter frames per batch. Lower if you hit CUDA OOM.
-PROPAINTER_SUB_VIDEO_LENGTH = 10
+# ProPainter frames per batch. Tuned for a larger GPU (L4 22GB / A100 40GB).
+# Lower if you hit CUDA OOM (e.g. 16 on smaller cards).
+PROPAINTER_SUB_VIDEO_LENGTH = 40
 # Run ProPainter only on a horizontal strip around the subtitle band (full width,
 # this many pixels above/below the band). Set None to process the whole frame.
 PROPAINTER_BAND_MARGIN = 48
-# Downscale factor for ProPainter processing (the heaviest VRAM lever — memory
-# scales with the square of resolution). The inpainted result is upscaled and
-# only the thin text strokes are composited back, so the softening is confined to
-# the strokes; the rest of the band stays the sharp original. 1.0 = no downscale.
-PROPAINTER_SCALE = 0.5
+# Downscale factor for ProPainter. 1.0 = full resolution (sharp). On a bigger GPU
+# keep this at 1.0 for clean, sharp, temporally-coherent fills. Lower only if VRAM
+# is tight — the result is upscaled and only the thin strokes are composited back.
+PROPAINTER_SCALE = 1.0
 # Temporal mask stabilisation (frames each side): the per-frame stroke mask is
 # OR-ed with its neighbours' masks so the inpainted region stops shifting
 # frame-to-frame. Mask jitter is the main source of LaMa flicker; a stable
