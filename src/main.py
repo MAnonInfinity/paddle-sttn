@@ -924,6 +924,39 @@ class SubtitleRemover:
 
         return full if any_found else None
 
+    @staticmethod
+    def estimate_affine(gray_from, gray_to, ignore_mask=None):
+        """
+        Estimate a partial-affine (translation+rotation+scale) that maps
+        gray_from onto gray_to, using ORB features. Used to align scene frames to
+        a reference so a median background plate works under camera pan/zoom.
+        Features under ignore_mask (the subtitle strokes) are excluded so text
+        doesn't pollute the alignment. Returns a 2x3 matrix or None on failure.
+        """
+        try:
+            orb = cv2.ORB_create(800)
+            fmask = None
+            if ignore_mask is not None:
+                fmask = np.where(ignore_mask > 0, 0, 255).astype(np.uint8)
+            k1, d1 = orb.detectAndCompute(gray_from, fmask)
+            k2, d2 = orb.detectAndCompute(gray_to, None)
+            if d1 is None or d2 is None or len(k1) < 12 or len(k2) < 12:
+                return None
+            bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+            knn = bf.knnMatch(d1, d2, k=2)
+            good = [m for m, n in (pair for pair in knn if len(pair) == 2)
+                    if m.distance < 0.75 * n.distance]
+            if len(good) < 12:
+                return None
+            src = np.float32([k1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+            dst = np.float32([k2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+            M, inliers = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC)
+            if M is None or inliers is None or int(inliers.sum()) < 8:
+                return None
+            return M
+        except Exception:
+            return None
+
     def propainter_mode(self, tbar):
         print('use propainter mode')
         sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
@@ -1192,7 +1225,7 @@ class SubtitleRemover:
             # around the subtitles (full width) to keep VRAM in budget. Height
             # snapped to a multiple of 8 (model requirement). None = whole frame.
             pp_strip = None
-            if config.STROKE_INPAINTER in ('propainter', 'flowfill'):
+            if config.STROKE_INPAINTER in ('propainter', 'flowfill', 'plate'):
                 margin = (config.PROPAINTER_BAND_MARGIN if config.STROKE_INPAINTER == 'propainter'
                           else config.FLOWFILL_BAND_MARGIN)
                 if margin is not None:
@@ -1267,19 +1300,22 @@ class SubtitleRemover:
 
                     # Temporal stabilisation: OR each frame's mask with its
                     # neighbours so the inpainted region stops jittering
-                    # frame-to-frame (the main source of LaMa flicker). Skipped for
-                    # 'plate' mode, where bigger holes mean fewer background samples.
+                    # frame-to-frame (the main source of LaMa flicker). Kept as a
+                    # SEPARATE set so the raw per-frame masks stay available for
+                    # plate/flowfill reveal logic, while the LaMa baseline uses the
+                    # stabilised ones.
                     w = config.STROKE_TEMPORAL_WINDOW
-                    if config.STROKE_INPAINTER not in ('plate', 'flowfill') and w > 0 and len(masks_batch) > 1:
-                        stabilised = []
+                    if w > 0 and len(masks_batch) > 1:
+                        stab_masks = []
                         n = len(masks_batch)
                         for i in range(n):
                             acc = masks_batch[i].copy()
                             for j in range(max(0, i - w), min(n, i + w + 1)):
                                 if j != i:
                                     acc = cv2.bitwise_or(acc, masks_batch[j])
-                            stabilised.append(acc)
-                        masks_batch = stabilised
+                            stab_masks.append(acc)
+                    else:
+                        stab_masks = masks_batch
                     area_mask = interval_masks[interval_key]  # band box (strip area)
                 else:
                     masks_batch = None
@@ -1386,57 +1422,105 @@ class SubtitleRemover:
                                 out = self.lama_inpaint(out, mfull)
                         _write(out, frames_batch[i])
                 elif config.STROKE_INPAINTER == 'plate' and masks_batch is not None:
-                    # Temporal-median background plate (sharp, real pixels, no GPU,
-                    # no flicker). For each band pixel, take the median over the
-                    # frames where it is NOT under a stroke -> the true background
-                    # behind fixed subtitles. Pixels that move (a person crossing
-                    # the band) have unstable samples; those fall back to LaMa.
+                    # Motion-compensated background plate over LaMa baseline.
+                    #   1. Align every scene frame to a reference (ORB affine) so
+                    #      camera pan/zoom doesn't smear the median.
+                    #   2. Median the stroke-free, aligned samples -> real
+                    #      background in reference coords; mark pixels reliable
+                    #      where enough samples AND low temporal variance.
+                    #   3. Per frame: LaMa-fill ALL strokes (stabilised mask) as a
+                    #      baseline, then overlay the warped-back real background on
+                    #      reliable pixels with a feathered alpha (no seams).
+                    # Guarantee: 0 reliable px -> output == stabilised LaMa, never
+                    # worse; reliable px -> sharp, flicker-free real background.
+                    import warnings as _w
                     sy0, sy1 = pp_strip if pp_strip is not None else (0, self.frame_height)
-                    strips = np.stack([f[sy0:sy1, :].astype(np.float32) for f in frames_batch])
-                    msk = np.stack([(m[sy0:sy1, :] > 0) for m in masks_batch])  # (N,h,w)
-                    samp = strips.copy()
-                    samp[msk] = np.nan
-                    with np.errstate(all='ignore'):
-                        import warnings as _w
+                    n = len(frames_batch)
+                    ref = n // 2
+                    color = [f[sy0:sy1, :] for f in frames_batch]
+                    grays = [cv2.cvtColor(c, cv2.COLOR_BGR2GRAY) for c in color]
+                    mstr = [(m[sy0:sy1, :] > 0) for m in masks_batch]
+                    h_s, w_s = sy1 - sy0, self.size[0]
+
+                    # 1. affine each frame -> ref
+                    affines = [None] * n
+                    affines[ref] = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
+                    for i in range(n):
+                        if i == ref:
+                            continue
+                        affines[i] = self.estimate_affine(grays[i], grays[ref], mstr[i])
+
+                    # 2. aligned median in ref coords
+                    aligned = []
+                    for i in range(n):
+                        M = affines[i]
+                        if M is None:
+                            continue
+                        wimg = cv2.warpAffine(color[i].astype(np.float32), M, (w_s, h_s),
+                                              flags=cv2.INTER_LINEAR, borderValue=(0, 0, 0))
+                        wm = cv2.warpAffine(mstr[i].astype(np.uint8), M, (w_s, h_s),
+                                            flags=cv2.INTER_NEAREST, borderValue=1)
+                        wb = cv2.warpAffine(np.ones((h_s, w_s), np.uint8), M, (w_s, h_s),
+                                            flags=cv2.INTER_NEAREST, borderValue=0)
+                        invalid = (wm > 0) | (wb == 0)
+                        wimg[invalid] = np.nan
+                        aligned.append(wimg)
+                    if aligned:
                         with _w.catch_warnings():
                             _w.simplefilter('ignore')
-                            plate = np.nanmedian(samp, axis=0)            # (h,w,3)
-                            valid = (~np.isnan(samp[:, :, :, 0])).sum(0)   # (h,w)
-                            gray = samp.mean(axis=3)                       # (N,h,w)
-                            tstd = np.nanstd(gray, axis=0)                 # (h,w)
-                    reliable = (valid >= config.PLATE_MIN_SAMPLES) & (tstd < config.PLATE_STD_THRESH)
-                    plate_u8 = np.nan_to_num(plate).astype(np.uint8)
+                            stack = np.stack(aligned)
+                            plate_ref = np.nanmedian(stack, axis=0)            # (h,w,3)
+                            cnt = (~np.isnan(stack[:, :, :, 0])).sum(0)        # (h,w)
+                            tstd = np.nanstd(stack.mean(axis=3), axis=0)       # (h,w)
+                        reliable_ref = ((cnt >= config.PLATE_MIN_SAMPLES) &
+                                        (tstd < config.PLATE_STD_THRESH)).astype(np.uint8)
+                        plate_ref = np.nan_to_num(plate_ref).astype(np.uint8)
+                    else:
+                        plate_ref = None
+
+                    if self.lama_inpaint is None:
+                        self.lama_inpaint = LamaInpaint()
+
                     for i, f in enumerate(frames_batch):
-                        sm = msk[i]
-                        if sm.any():
-                            region = f[sy0:sy1, :]
-                            rel = sm & reliable
-                            unrel = sm & ~reliable
-                            # Debug: green = real-background (plate) fill, red = LaMa.
-                            # Mostly green = clean/stable; mostly red = degraded to LaMa.
-                            if (not getattr(self, '_plate_debug_saved', False)
-                                    and int(sm.sum()) > 200):
-                                try:
-                                    ov = f.copy(); ovr = ov[sy0:sy1, :]
-                                    ovr[rel] = (0, 255, 0); ovr[unrel] = (0, 0, 255)
-                                    ratio = 100.0 * float(rel.sum()) / float(sm.sum())
-                                    dbg = os.path.join(os.path.dirname(self.video_out_name),
-                                                       f'{self.vd_name}_plate_debug.png')
-                                    cv2.imwrite(dbg, ov)
-                                    print(f'[plate] {ratio:.0f}% real-background (green), '
-                                          f'{100 - ratio:.0f}% LaMa (red). Debug: {dbg}')
-                                    colab_autodownload(dbg)
-                                except Exception as e:
-                                    print(f'[plate] (debug overlay skipped: {e})')
-                                self._plate_debug_saved = True
-                            region[rel] = plate_u8[rel]
-                            if unrel.any():
-                                if self.lama_inpaint is None:
-                                    self.lama_inpaint = LamaInpaint()
-                                mfull = np.zeros((self.frame_height, self.frame_width), np.uint8)
-                                mfull[sy0:sy1, :][unrel] = 255
-                                f = self.lama_inpaint(f, mfull)
-                        _write(f, f)
+                        sm_raw = mstr[i]
+                        # LaMa baseline over the stabilised mask (== lama mode).
+                        out = f
+                        sb = stab_masks[i]
+                        if sb.any():
+                            out = self.lama_inpaint(f, sb)
+                        # Overlay real background where reliable + alignable.
+                        rel_here = np.zeros((h_s, w_s), bool)
+                        if plate_ref is not None and affines[i] is not None and sm_raw.any():
+                            invM = cv2.invertAffineTransform(affines[i])
+                            plate_i = cv2.warpAffine(plate_ref, invM, (w_s, h_s), flags=cv2.INTER_LINEAR)
+                            rel_i = cv2.warpAffine(reliable_ref, invM, (w_s, h_s),
+                                                   flags=cv2.INTER_NEAREST) > 0
+                            rel_here = sm_raw & rel_i
+                            if rel_here.any():
+                                # Feathered alpha so plate blends into LaMa baseline.
+                                alpha = cv2.GaussianBlur((rel_here * 255).astype(np.float32), (0, 0), 1.5) / 255.0
+                                alpha = alpha[..., None]
+                                reg = out[sy0:sy1, :].astype(np.float32)
+                                blended = alpha * plate_i.astype(np.float32) + (1 - alpha) * reg
+                                out[sy0:sy1, :] = blended.astype(np.uint8)
+
+                        if (not getattr(self, '_plate_debug_saved', False) and int(sm_raw.sum()) > 200):
+                            try:
+                                ov = frames_batch[i].copy(); ovr = ov[sy0:sy1, :]
+                                ovr[rel_here] = (0, 255, 0)
+                                ovr[sm_raw & ~rel_here] = (0, 0, 255)
+                                ratio = 100.0 * float(rel_here.sum()) / float(sm_raw.sum())
+                                dbg = os.path.join(os.path.dirname(self.video_out_name),
+                                                   f'{self.vd_name}_plate_debug.png')
+                                cv2.imwrite(dbg, ov)
+                                print(f'[plate] {ratio:.0f}% real-background (green), '
+                                      f'{100 - ratio:.0f}% LaMa (red). Debug: {dbg}')
+                                colab_autodownload(dbg)
+                            except Exception as e:
+                                print(f'[plate] (debug overlay skipped: {e})')
+                            self._plate_debug_saved = True
+
+                        _write(out, frames_batch[i])
                 elif config.STROKE_INPAINTER == 'sttn':
                     # (Kept for reference; grey-fills static subtitles — not advised.)
                     if sttn_inpaint is None:
@@ -1459,7 +1543,10 @@ class SubtitleRemover:
                     while i0 < len(frames_batch):
                         step = pp_len if use_pp else 1
                         sub_f = frames_batch[i0:i0 + step]
-                        sub_m = masks_batch[i0:i0 + step] if masks_batch is not None else None
+                        # ProPainter zeroes the raw per-frame mask; the LaMa path
+                        # uses the temporally-stabilised mask (less flicker).
+                        msrc = masks_batch if use_pp else stab_masks
+                        sub_m = msrc[i0:i0 + step] if msrc is not None else None
                         # Skip inpainting if every frame in this sub-batch is empty.
                         if sub_m is not None and not any(mm.any() for mm in sub_m):
                             for f in sub_f:

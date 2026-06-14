@@ -179,13 +179,16 @@ USE_STROKE_MASK = True
 #   warped from neighbouring frames via optical flow (motion-aligned), median over
 #   neighbours → temporally consistent (kills flicker) and sharp. Pixels no
 #   neighbour can supply fall back to LaMa. CPU/low-VRAM. Default.
-# - 'plate': temporal-median plate (no flow) — sharp on locked shots, blocky under
-#   camera motion. 'flowfill' is the motion-aware upgrade.
+# - 'plate': motion-compensated background plate over a LaMa baseline. Aligns
+#   scene frames (ORB affine) so camera pan/zoom is handled, medians the
+#   stroke-free aligned samples into real sharp background, and overlays it
+#   (feathered) on confident pixels; everything else is LaMa. Never worse than
+#   LaMa (LaMa is the baseline). Default.
 # - 'propainter': true flow-based neural inpainting — best, but heavy VRAM (only
 #   fits downscaled/soft on a T4).
 # - 'lama': per-frame spatial inpainting. Sharp, never grey, but flickers.
 # - 'sttn': grey-fills static subtitles. Avoid.
-STROKE_INPAINTER = 'lama'
+STROKE_INPAINTER = 'plate'
 # 'flowfill': number of neighbour frames each side to warp background from. More =
 # more chances to recover an occluded pixel, but slower.
 FLOWFILL_WINDOW = 3
