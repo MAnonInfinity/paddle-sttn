@@ -905,41 +905,29 @@ class SubtitleRemover:
                 continue
 
             gray = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
-            # White core: brighter than local neighbourhood.
+            # Local-contrast: bright core (white text) and dark (outline + texture).
             bright = cv2.adaptiveThreshold(
                 gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, block, -C)
-            # ...AND among the brightest pixels in the box. White subtitle text is
-            # the brightest thing in its box; mid-bright textured backgrounds
-            # (knit blankets, foliage) are not — this rejects their over-catch.
-            # Scene-adaptive via a percentile so dim-but-bright text still passes.
-            thr = np.percentile(gray, config.STROKE_BRIGHT_PCTL)
-            bright = cv2.bitwise_and(bright, (gray >= thr).astype(np.uint8) * 255)
-            # Dark outline: darker than local neighbourhood.
             dark = cv2.adaptiveThreshold(
                 gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block, C)
-            # Keep only the dark pixels that ring a bright core (the outline of
-            # white text), not standalone dark texture/shadows. The reach must
-            # cover the full outline thickness or a dark letter-outline ghost is
-            # left behind; too large re-catches texture.
-            dark_outline = cv2.bitwise_and(
-                dark, cv2.dilate(bright, kernel, iterations=config.STROKE_OUTLINE_REACH))
-            m = cv2.bitwise_or(bright, dark_outline)
-            m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+            # Adaptive glyph extraction (no fixed outline-thickness constant):
+            # a subtitle glyph is a bright core PLUS its attached dark outline as
+            # one connected high-contrast blob. Keep connected components of
+            # (bright OR dark) that CONTAIN a bright core; drop dark blobs with no
+            # core (standalone texture/shadows). This self-sizes to any outline
+            # thickness and generalises across subtitle styles.
+            cand = cv2.bitwise_or(bright, dark)
+            num, labels = cv2.connectedComponents(cand, connectivity=8)
+            core_labels = np.unique(labels[bright > 0])
+            core_labels = core_labels[core_labels != 0]
+            m = np.isin(labels, core_labels).astype(np.uint8) * 255
             if config.STROKE_DILATE_PIXELS > 0:
                 m = cv2.dilate(m, kernel, iterations=config.STROKE_DILATE_PIXELS)
 
-            # Density filter: real text is locally SPARSE (thin strokes with gaps);
-            # textured-background over-catch is locally DENSE (a filled blob). Drop
-            # pixels sitting in dense regions — kills the solid-block over-catch on
-            # bright textured backgrounds (knit, foliage) regardless of brightness,
-            # while keeping thin glyph strokes.
-            win = config.STROKE_DENSITY_WIN | 1
-            dens = cv2.boxFilter((m > 0).astype(np.float32), -1, (win, win))
-            m[dens > config.STROKE_DENSITY_MAX] = 0
-
-            # Fill-ratio guard: real text is SPARSE inside its box. If the mask
-            # covers more than STROKE_MAX_FILL_FRAC of the box it's almost
-            # certainly texture over-catch (or a false-positive box), so drop it.
+            # Fill-ratio guard: if a blob containing a core still covers most of the
+            # box, text and background merged into one component (busy background) —
+            # drop it rather than inpaint the whole band.
             box_area = (y1 - y0) * (x1 - x0)
             if cv2.countNonZero(m) > config.STROKE_MAX_FILL_FRAC * box_area:
                 continue

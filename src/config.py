@@ -236,32 +236,15 @@ STROKE_PROPAGATE_MAX_GAP = 6
 # (e.g. white clothing) the dark outline fires.
 # Neighbourhood size (odd) for the local-contrast comparison.
 STROKE_BLOCK_SIZE = 25
-# A pixel is a stroke if it is at least this much brighter OR darker (0-255)
+# A pixel is high-contrast if it is at least this much brighter OR darker (0-255)
 # than its local neighbourhood mean. Lower to catch fainter text.
 STROKE_LOCAL_C = 10
-# How far (px) the dark outline of white text extends from the bright core. The
-# dark ring within this reach of a bright core is masked; set high enough to
-# cover the full outline or a dark letter-ghost remains.
-STROKE_OUTLINE_REACH = 5
-# Grow the final stroke mask by this many pixels to cover anti-aliased edges and
-# any residual outline.
+# Grow the final glyph mask by this many pixels to cover anti-aliased edges.
 STROKE_DILATE_PIXELS = 2
-# Pad each OCR box by this many pixels before stroke detection, so outline
-# pixels just outside the text bbox are still covered.
+# Pad each OCR box by this many pixels before detection.
 STROKE_BOX_PAD = 4
-# Fill-ratio guard: drop a box's mask only if it covers more than this fraction
-# of the box — a near-solid mask = texture over-catch. Kept HIGH so dense 2-line
-# subtitles (which legitimately fill much of a tight box) are NOT dropped; the
-# outline-adjacency test is the primary texture rejector.
+# Fill-ratio guard: drop a box's mask if it covers more than this fraction of the
+# box — text+outline merged with the background into one blob (busy background).
 STROKE_MAX_FILL_FRAC = 0.85
-# Brightness gate: keep a bright-core pixel only if at/above this percentile of
-# box brightness. 0 = inert (disabled — it dropped real text on bright textured
-# backgrounds where the gate couldn't separate text from background).
-STROKE_BRIGHT_PCTL = 0
-# Density filter: drop mask pixels where local mask coverage exceeds the max.
-# Disabled (>1.0 = inert): it killed real 2-line subtitles, which are as locally
-# dense as the texture it was meant to reject.
-STROKE_DENSITY_WIN = 17
-STROKE_DENSITY_MAX = 1.1
 # ********** Stroke-level mask settings end **********
 # ******************** [MODIFIABLE] end ********************
