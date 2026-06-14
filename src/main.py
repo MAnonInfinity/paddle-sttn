@@ -911,13 +911,22 @@ class SubtitleRemover:
             # Dark outline: darker than local neighbourhood.
             dark = cv2.adaptiveThreshold(
                 gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block, C)
-            m = cv2.bitwise_or(bright, dark)
-            # Bridge core+outline, then grow slightly. Keep close light so glyphs
-            # don't merge into a solid bar (smaller hole = less visible fill).
+            # Keep only the dark pixels that ring a bright core (the outline of
+            # white text), not standalone dark texture/shadows. This is what
+            # rejects busy backgrounds (blankets, foliage) that otherwise make the
+            # mask a solid blob.
+            dark_outline = cv2.bitwise_and(dark, cv2.dilate(bright, kernel, iterations=2))
+            m = cv2.bitwise_or(bright, dark_outline)
             m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel, iterations=1)
             if config.STROKE_DILATE_PIXELS > 0:
                 m = cv2.dilate(m, kernel, iterations=config.STROKE_DILATE_PIXELS)
 
+            # Fill-ratio guard: real text is SPARSE inside its box. If the mask
+            # covers more than STROKE_MAX_FILL_FRAC of the box it's almost
+            # certainly texture over-catch (or a false-positive box), so drop it.
+            box_area = (y1 - y0) * (x1 - x0)
+            if cv2.countNonZero(m) > config.STROKE_MAX_FILL_FRAC * box_area:
+                continue
             if cv2.countNonZero(m) > 0:
                 full[y0:y1, x0:x1] = np.maximum(full[y0:y1, x0:x1], m)
                 any_found = True

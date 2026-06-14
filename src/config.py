@@ -237,9 +237,13 @@ STROKE_BLOCK_SIZE = 25
 STROKE_LOCAL_C = 10
 # Grow the stroke mask by this many pixels to bridge core+outline into a solid
 # glyph and cover anti-aliased edges.
-STROKE_DILATE_PIXELS = 2
+STROKE_DILATE_PIXELS = 1
 # Pad each OCR box by this many pixels before stroke detection, so outline
 # pixels just outside the text bbox are still covered.
 STROKE_BOX_PAD = 4
+# Fill-ratio guard: if the stroke mask covers more than this fraction of a text
+# box, treat it as texture over-catch (not real text) and drop it. Real subtitle
+# text is sparse inside its box; busy backgrounds fill it.
+STROKE_MAX_FILL_FRAC = 0.45
 # ********** Stroke-level mask settings end **********
 # ******************** [MODIFIABLE] end ********************
