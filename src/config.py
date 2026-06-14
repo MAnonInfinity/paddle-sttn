@@ -185,7 +185,7 @@ USE_STROKE_MASK = True
 #   fits downscaled/soft on a T4).
 # - 'lama': per-frame spatial inpainting. Sharp, never grey, but flickers.
 # - 'sttn': grey-fills static subtitles. Avoid.
-STROKE_INPAINTER = 'flowfill'
+STROKE_INPAINTER = 'lama'
 # 'flowfill': number of neighbour frames each side to warp background from. More =
 # more chances to recover an occluded pixel, but slower.
 FLOWFILL_WINDOW = 3
@@ -216,8 +216,9 @@ PROPAINTER_SCALE = 0.5
 # region over a near-static background gives a near-stable fill. 0 disables.
 STROKE_TEMPORAL_WINDOW = 2
 # Don't propagate OCR boxes to frames further than this many frames from a real
-# detection — avoids masking background on long no-text stretches.
-STROKE_PROPAGATE_MAX_GAP = 6
+# detection — avoids masking (and inpainting) background on no-text frames, which
+# otherwise over-catch texture and add flicker. Keep small.
+STROKE_PROPAGATE_MAX_GAP = 1
 # Stroke detection runs INSIDE each OCR text box (localised by detection),
 # capturing both the white core and the dark outline of subtitle text via
 # local contrast. Detecting both polarities is what makes it work on any
