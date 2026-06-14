@@ -1192,15 +1192,17 @@ class SubtitleRemover:
             # around the subtitles (full width) to keep VRAM in budget. Height
             # snapped to a multiple of 8 (model requirement). None = whole frame.
             pp_strip = None
-            if config.STROKE_INPAINTER == 'propainter' and config.PROPAINTER_BAND_MARGIN is not None:
-                m = config.PROPAINTER_BAND_MARGIN
-                y0 = max(0, b_ymin - m)
-                y1 = min(self.frame_height, b_ymax + m)
-                y0 -= (y1 - y0) % 8
-                y0 = max(0, y0)
-                pp_strip = (y0, y1)
-                print(f'[ProPainter] band strip rows {y0}-{y1} '
-                      f'({y1 - y0}px of {self.frame_height}).')
+            if config.STROKE_INPAINTER in ('propainter', 'flowfill'):
+                margin = (config.PROPAINTER_BAND_MARGIN if config.STROKE_INPAINTER == 'propainter'
+                          else config.FLOWFILL_BAND_MARGIN)
+                if margin is not None:
+                    y0 = max(0, b_ymin - margin)
+                    y1 = min(self.frame_height, b_ymax + margin)
+                    y0 -= (y1 - y0) % 8
+                    y0 = max(0, y0)
+                    pp_strip = (y0, y1)
+                    print(f'[{config.STROKE_INPAINTER}] band strip rows {y0}-{y1} '
+                          f'({y1 - y0}px of {self.frame_height}).')
 
             print('[Processing] start removing subtitles...')
 
@@ -1268,7 +1270,7 @@ class SubtitleRemover:
                     # frame-to-frame (the main source of LaMa flicker). Skipped for
                     # 'plate' mode, where bigger holes mean fewer background samples.
                     w = config.STROKE_TEMPORAL_WINDOW
-                    if config.STROKE_INPAINTER != 'plate' and w > 0 and len(masks_batch) > 1:
+                    if config.STROKE_INPAINTER not in ('plate', 'flowfill') and w > 0 and len(masks_batch) > 1:
                         stabilised = []
                         n = len(masks_batch)
                         for i in range(n):
@@ -1307,7 +1309,59 @@ class SubtitleRemover:
                         out = f if (m is None or not m.any()) else self.lama_inpaint(f, m)
                         _write(out, f)
 
-                if config.STROKE_INPAINTER == 'plate' and masks_batch is not None:
+                if config.STROKE_INPAINTER == 'flowfill' and masks_batch is not None:
+                    # ProPainter-lite: fill each stroke pixel with REAL background
+                    # warped from neighbour frames via optical flow (motion-aligned),
+                    # median over neighbours -> temporally consistent + sharp.
+                    # Pixels no neighbour can supply fall back to LaMa.
+                    sy0, sy1 = pp_strip if pp_strip is not None else (0, self.frame_height)
+                    h_s, w_s = sy1 - sy0, self.size[0]
+                    grays = [cv2.cvtColor(f[sy0:sy1, :], cv2.COLOR_BGR2GRAY) for f in frames_batch]
+                    strip_imgs = [f[sy0:sy1, :] for f in frames_batch]
+                    mstrips = [(m[sy0:sy1, :] > 0) for m in masks_batch]
+                    gx, gy = np.meshgrid(np.arange(w_s, dtype=np.float32),
+                                         np.arange(h_s, dtype=np.float32))
+                    W = config.FLOWFILL_WINDOW
+                    n = len(frames_batch)
+                    import warnings as _w
+                    for i in range(n):
+                        out = frames_batch[i]
+                        mi = mstrips[i]
+                        if mi.any():
+                            samples = []
+                            for j in range(max(0, i - W), min(n, i + W + 1)):
+                                if j == i:
+                                    continue
+                                flow = cv2.calcOpticalFlowFarneback(
+                                    grays[i], grays[j], None, 0.5, 3, 21, 3, 7, 1.5, 0)
+                                mapx = gx + flow[..., 0]
+                                mapy = gy + flow[..., 1]
+                                warped = cv2.remap(strip_imgs[j].astype(np.float32), mapx, mapy,
+                                                   cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+                                wmask = cv2.remap(mstrips[j].astype(np.uint8), mapx, mapy,
+                                                  cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT,
+                                                  borderValue=1)
+                                warped[wmask > 0] = np.nan  # neighbour pixel was itself a stroke
+                                samples.append(warped)
+                            region = out[sy0:sy1, :]
+                            if samples:
+                                with _w.catch_warnings():
+                                    _w.simplefilter('ignore')
+                                    filled = np.nanmedian(np.stack(samples), axis=0)  # (h,w,3)
+                                valid = ~np.isnan(filled[..., 0])
+                                fill_here = mi & valid
+                                region[fill_here] = np.nan_to_num(filled)[fill_here].astype(np.uint8)
+                                leftover = mi & ~valid
+                            else:
+                                leftover = mi
+                            if leftover.any():
+                                if self.lama_inpaint is None:
+                                    self.lama_inpaint = LamaInpaint()
+                                mfull = np.zeros((self.frame_height, self.frame_width), np.uint8)
+                                mfull[sy0:sy1, :][leftover] = 255
+                                out = self.lama_inpaint(out, mfull)
+                        _write(out, frames_batch[i])
+                elif config.STROKE_INPAINTER == 'plate' and masks_batch is not None:
                     # Temporal-median background plate (sharp, real pixels, no GPU,
                     # no flicker). For each band pixel, take the median over the
                     # frames where it is NOT under a stroke -> the true background

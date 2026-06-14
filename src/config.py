@@ -175,16 +175,22 @@ LAMA_SUPER_FAST = False
 # no flicker, and per-frame thresholding also recovers frames OCR missed.
 USE_STROKE_MASK = True
 # Inpainter for the stroke masks:
-# - 'plate': temporal-median background plate. For each band pixel, median of the
-#   frames where it is NOT under a stroke → the true sharp background behind fixed
-#   subtitles. Real pixels (no blur), no flicker, no GPU. Moving pixels (person
-#   crossing the band) fall back to LaMa. Best fit for fixed subs over mostly
-#   static backgrounds. Default.
-# - 'propainter': flow-based video inpainting. Temporally coherent, but on a T4 it
-#   only fits downscaled → soft fills. Heaviest VRAM.
-# - 'lama': per-frame spatial inpainting. Never grey, but flickers.
-# - 'sttn': grey-fills static subtitles (no temporal reference). Avoid.
-STROKE_INPAINTER = 'lama'
+# - 'flowfill': ProPainter-lite. Fill each stroke pixel with REAL background
+#   warped from neighbouring frames via optical flow (motion-aligned), median over
+#   neighbours → temporally consistent (kills flicker) and sharp. Pixels no
+#   neighbour can supply fall back to LaMa. CPU/low-VRAM. Default.
+# - 'plate': temporal-median plate (no flow) — sharp on locked shots, blocky under
+#   camera motion. 'flowfill' is the motion-aware upgrade.
+# - 'propainter': true flow-based neural inpainting — best, but heavy VRAM (only
+#   fits downscaled/soft on a T4).
+# - 'lama': per-frame spatial inpainting. Sharp, never grey, but flickers.
+# - 'sttn': grey-fills static subtitles. Avoid.
+STROKE_INPAINTER = 'flowfill'
+# 'flowfill': number of neighbour frames each side to warp background from. More =
+# more chances to recover an occluded pixel, but slower.
+FLOWFILL_WINDOW = 3
+# Strip (full width, this many px above/below the band) that flowfill operates on.
+FLOWFILL_BAND_MARGIN = 48
 # 'plate' mode: a band pixel's median is trusted only if it has at least this many
 # stroke-free samples in the chunk and its temporal std is below the threshold
 # (i.e. the background there is actually static). Otherwise LaMa fills it.
