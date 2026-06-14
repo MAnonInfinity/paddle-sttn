@@ -1167,7 +1167,7 @@ class SubtitleRemover:
             # around the subtitles (full width) to keep VRAM in budget. Height
             # snapped to a multiple of 8 (model requirement). None = whole frame.
             pp_strip = None
-            if config.PROPAINTER_BAND_MARGIN is not None:
+            if config.STROKE_INPAINTER == 'propainter' and config.PROPAINTER_BAND_MARGIN is not None:
                 m = config.PROPAINTER_BAND_MARGIN
                 y0 = max(0, b_ymin - m)
                 y1 = min(self.frame_height, b_ymax + m)
