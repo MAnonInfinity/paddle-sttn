@@ -240,8 +240,10 @@ STROKE_BLOCK_SIZE = 25
 # than its local neighbourhood mean. Lower to catch fainter text.
 STROKE_LOCAL_C = 10
 # Grow the stroke mask by this many pixels to bridge core+outline into a solid
-# glyph and cover anti-aliased edges.
-STROKE_DILATE_PIXELS = 1
+# glyph and cover anti-aliased edges. Grown to 3 to cover the dark text outline
+# on DARK backgrounds, where the outline has no local contrast and can't be
+# detected directly (it was left behind as a dark ghost on dark scenes).
+STROKE_DILATE_PIXELS = 3
 # Pad each OCR box by this many pixels before stroke detection, so outline
 # pixels just outside the text bbox are still covered.
 STROKE_BOX_PAD = 4
