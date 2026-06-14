@@ -185,17 +185,21 @@ USE_STROKE_MASK = True
 #   fits downscaled/soft on a T4).
 # - 'lama': per-frame spatial inpainting. Sharp, never grey, but flickers.
 # - 'sttn': grey-fills static subtitles. Avoid.
-STROKE_INPAINTER = 'lama'
+STROKE_INPAINTER = 'plate'
 # 'flowfill': number of neighbour frames each side to warp background from. More =
 # more chances to recover an occluded pixel, but slower.
 FLOWFILL_WINDOW = 3
 # Strip (full width, this many px above/below the band) that flowfill operates on.
 FLOWFILL_BAND_MARGIN = 48
-# 'plate' mode: a band pixel's median is trusted only if it has at least this many
-# stroke-free samples in the chunk and its temporal std is below the threshold
-# (i.e. the background there is actually static). Otherwise LaMa fills it.
-PLATE_MIN_SAMPLES = 3
-PLATE_STD_THRESH = 16
+# 'plate' mode = the safe auto-hybrid. A band pixel uses the real median
+# background ONLY if it has at least PLATE_MIN_SAMPLES stroke-free samples in the
+# scene AND its temporal std is below PLATE_STD_THRESH (background actually static
+# there). Otherwise LaMa fills it. The gate is deliberately STRICT so 'plate'
+# never looks worse than LaMa: it swaps in real, sharp, flicker-free background
+# only where confident (locked shots with dialogue gaps — common in movies),
+# and falls back to LaMa on motion / un-revealed pixels.
+PLATE_MIN_SAMPLES = 5
+PLATE_STD_THRESH = 9
 # 'plate' processes a whole scene at once (capped here) so the subtitle text
 # changes within the window and most band pixels get revealed. Holds this many
 # frames in RAM at once; lower if memory is tight on very long scenes.

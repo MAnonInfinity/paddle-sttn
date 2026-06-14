@@ -1411,8 +1411,25 @@ class SubtitleRemover:
                         if sm.any():
                             region = f[sy0:sy1, :]
                             rel = sm & reliable
-                            region[rel] = plate_u8[rel]
                             unrel = sm & ~reliable
+                            # Debug: green = real-background (plate) fill, red = LaMa.
+                            # Mostly green = clean/stable; mostly red = degraded to LaMa.
+                            if (not getattr(self, '_plate_debug_saved', False)
+                                    and int(sm.sum()) > 200):
+                                try:
+                                    ov = f.copy(); ovr = ov[sy0:sy1, :]
+                                    ovr[rel] = (0, 255, 0); ovr[unrel] = (0, 0, 255)
+                                    ratio = 100.0 * float(rel.sum()) / float(sm.sum())
+                                    dbg = os.path.join(os.path.dirname(self.video_out_name),
+                                                       f'{self.vd_name}_plate_debug.png')
+                                    cv2.imwrite(dbg, ov)
+                                    print(f'[plate] {ratio:.0f}% real-background (green), '
+                                          f'{100 - ratio:.0f}% LaMa (red). Debug: {dbg}')
+                                    colab_autodownload(dbg)
+                                except Exception as e:
+                                    print(f'[plate] (debug overlay skipped: {e})')
+                                self._plate_debug_saved = True
+                            region[rel] = plate_u8[rel]
                             if unrel.any():
                                 if self.lama_inpaint is None:
                                     self.lama_inpaint = LamaInpaint()
