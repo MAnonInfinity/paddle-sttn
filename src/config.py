@@ -250,15 +250,14 @@ STROKE_BOX_PAD = 4
 # subtitles (which legitimately fill much of a tight box) are NOT dropped; the
 # outline-adjacency test is the primary texture rejector.
 STROKE_MAX_FILL_FRAC = 0.85
-# White text is among the brightest pixels in its box; require the bright-core to
-# be at/above this percentile of box brightness. Rejects mid-bright textured
-# backgrounds (knit, foliage). Lower to catch dimmer text; raise to be stricter.
-STROKE_BRIGHT_PCTL = 80
-# Density filter: drop mask pixels where the local mask coverage (in a
-# STROKE_DENSITY_WIN window) exceeds STROKE_DENSITY_MAX. Real text is sparse
-# (thin strokes); texture over-catch is a dense blob. Raise MAX to keep denser
-# text; lower to cut texture harder.
+# Brightness gate: keep a bright-core pixel only if at/above this percentile of
+# box brightness. 0 = inert (disabled — it dropped real text on bright textured
+# backgrounds where the gate couldn't separate text from background).
+STROKE_BRIGHT_PCTL = 0
+# Density filter: drop mask pixels where local mask coverage exceeds the max.
+# Disabled (>1.0 = inert): it killed real 2-line subtitles, which are as locally
+# dense as the texture it was meant to reject.
 STROKE_DENSITY_WIN = 17
-STROKE_DENSITY_MAX = 0.55
+STROKE_DENSITY_MAX = 1.1
 # ********** Stroke-level mask settings end **********
 # ******************** [MODIFIABLE] end ********************
