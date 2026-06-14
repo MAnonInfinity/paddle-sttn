@@ -934,6 +934,31 @@ class SubtitleRemover:
         return full if any_found else None
 
     @staticmethod
+    def color_correct(out, mask_full, sy0, sy1, sigma=None):
+        """
+        Remove colour/brightness cast from an inpainted region so it matches the
+        surrounding real background. Shifts only the LOW-frequency colour of the
+        filled pixels toward the local background colour (estimated by blurring
+        the non-masked neighbourhood), preserving the fill's detail. Fixes the
+        'colours off' tint where the inpaint doesn't match its surroundings.
+        """
+        if sigma is None:
+            sigma = config.COLOR_CORRECT_SIGMA
+        reg = out[sy0:sy1].astype(np.float32)
+        sm = mask_full[sy0:sy1] > 0
+        if not sm.any():
+            return
+        weight = (~sm).astype(np.float32)               # 1 on real background
+        wb = cv2.GaussianBlur(weight, (0, 0), sigma) + 1e-6
+        local_bg = np.empty_like(reg)
+        for c in range(3):
+            local_bg[..., c] = cv2.GaussianBlur(reg[..., c] * weight, (0, 0), sigma) / wb
+        filled_blur = cv2.GaussianBlur(reg, (0, 0), sigma)
+        corr = local_bg - filled_blur                   # low-freq colour offset
+        reg[sm] = np.clip(reg[sm] + corr[sm], 0, 255)
+        out[sy0:sy1] = reg.astype(np.uint8)
+
+    @staticmethod
     def estimate_affine(gray_from, gray_to, ignore_mask=None):
         """
         Estimate a partial-affine (translation+rotation+scale) that maps
@@ -1512,6 +1537,10 @@ class SubtitleRemover:
                                 reg = out[sy0:sy1, :].astype(np.float32)
                                 blended = alpha * plate_i.astype(np.float32) + (1 - alpha) * reg
                                 out[sy0:sy1, :] = blended.astype(np.uint8)
+
+                        # Colour-match the filled region to its surroundings.
+                        if config.STROKE_COLOR_CORRECT and out is not f and sb.any():
+                            self.color_correct(out, stab_masks[i], sy0, sy1)
 
                         if (not getattr(self, '_plate_debug_saved', False) and int(sm_raw.sum()) > 200):
                             try:

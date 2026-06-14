@@ -203,6 +203,10 @@ FLOWFILL_BAND_MARGIN = 48
 # and falls back to LaMa on motion / un-revealed pixels.
 PLATE_MIN_SAMPLES = 5
 PLATE_STD_THRESH = 9
+# Colour-correct the inpainted region to match surrounding background (fixes the
+# faint colour/tint cast where the fill doesn't match its surroundings).
+STROKE_COLOR_CORRECT = True
+COLOR_CORRECT_SIGMA = 15
 # 'plate' processes a whole scene at once (capped here) so the subtitle text
 # changes within the window and most band pixels get revealed. Holds this many
 # frames in RAM at once; lower if memory is tight on very long scenes.
