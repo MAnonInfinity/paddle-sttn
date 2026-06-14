@@ -254,5 +254,11 @@ STROKE_MAX_FILL_FRAC = 0.85
 # be at/above this percentile of box brightness. Rejects mid-bright textured
 # backgrounds (knit, foliage). Lower to catch dimmer text; raise to be stricter.
 STROKE_BRIGHT_PCTL = 80
+# Density filter: drop mask pixels where the local mask coverage (in a
+# STROKE_DENSITY_WIN window) exceeds STROKE_DENSITY_MAX. Real text is sparse
+# (thin strokes); texture over-catch is a dense blob. Raise MAX to keep denser
+# text; lower to cut texture harder.
+STROKE_DENSITY_WIN = 17
+STROKE_DENSITY_MAX = 0.55
 # ********** Stroke-level mask settings end **********
 # ******************** [MODIFIABLE] end ********************

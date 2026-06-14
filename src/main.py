@@ -927,6 +927,15 @@ class SubtitleRemover:
             if config.STROKE_DILATE_PIXELS > 0:
                 m = cv2.dilate(m, kernel, iterations=config.STROKE_DILATE_PIXELS)
 
+            # Density filter: real text is locally SPARSE (thin strokes with gaps);
+            # textured-background over-catch is locally DENSE (a filled blob). Drop
+            # pixels sitting in dense regions — kills the solid-block over-catch on
+            # bright textured backgrounds (knit, foliage) regardless of brightness,
+            # while keeping thin glyph strokes.
+            win = config.STROKE_DENSITY_WIN | 1
+            dens = cv2.boxFilter((m > 0).astype(np.float32), -1, (win, win))
+            m[dens > config.STROKE_DENSITY_MAX] = 0
+
             # Fill-ratio guard: real text is SPARSE inside its box. If the mask
             # covers more than STROKE_MAX_FILL_FRAC of the box it's almost
             # certainly texture over-catch (or a false-positive box), so drop it.
