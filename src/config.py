@@ -174,6 +174,14 @@ LAMA_SUPER_FAST = False
 # ~10-20x, so the inpainter fills it cleanly from adjacent background with almost
 # no flicker, and per-frame thresholding also recovers frames OCR missed.
 USE_STROKE_MASK = True
+# Mask shape:
+# - 'box'    : mask the whole per-line OCR box. The only truly GENERAL mask —
+#              removes any subtitle style/colour/background reliably (stroke
+#              detection misses white-on-bright text). Larger fill, but the
+#              plate/colour-correction stack keeps it clean. Default.
+# - 'stroke' : mask only the glyph strokes (tighter, less to inpaint) but
+#              style-brittle — can miss low-contrast text. Use for simple cases.
+MASK_MODE = 'box'
 # Inpainter for the stroke masks:
 # - 'flowfill': ProPainter-lite. Fill each stroke pixel with REAL background
 #   warped from neighbouring frames via optical flow (motion-aligned), median over

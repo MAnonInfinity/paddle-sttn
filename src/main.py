@@ -1314,18 +1314,32 @@ class SubtitleRemover:
                     current_frame_index += 1
                     frames_batch.append(nxt)
 
-                # Per-frame stroke masks (only the text pixels). A frame with no
-                # detected strokes gets an empty mask and is left unchanged.
+                # Per-frame masks. MASK_MODE='box' (default) masks the whole
+                # per-line OCR box — reliable removal of ANY subtitle style (the
+                # only truly general mask; stroke detection misses white-on-bright
+                # text). MASK_MODE='stroke' masks only the glyphs (tighter, but
+                # style-brittle).
                 if config.USE_STROKE_MASK:
+                    PAD = config.SUBTITLE_AREA_DEVIATION_PIXEL
                     masks_batch = []
                     for i, f in enumerate(frames_batch):
                         fn = start_frame_index + i
-                        m = self.compute_stroke_mask(
-                            f, frame_boxes.get(fn), self.frame_height, self.frame_width)
+                        if config.MASK_MODE == 'stroke':
+                            m = self.compute_stroke_mask(
+                                f, frame_boxes.get(fn), self.frame_height, self.frame_width)
+                        else:  # 'box' — full OCR text-line boxes (padded)
+                            bxs = frame_boxes.get(fn)
+                            if bxs:
+                                coords = [(max(0, b[0] - PAD), min(self.frame_width, b[1] + PAD),
+                                           max(0, b[2] - PAD), min(self.frame_height, b[3] + PAD))
+                                          for b in bxs]
+                                m = create_mask(self.mask_size, coords)
+                            else:
+                                m = None
                         if m is None:
                             m = np.zeros((self.frame_height, self.frame_width), dtype=np.uint8)
                         masks_batch.append(m)
-                        # Save one stroke-mask overlay on a real text frame.
+                        # Save one mask overlay on a real text frame.
                         if (not getattr(self, '_stroke_debug_saved', False)
                                 and cv2.countNonZero(m) > 200):
                             try:
@@ -1334,10 +1348,10 @@ class SubtitleRemover:
                                 dbg = os.path.join(os.path.dirname(self.video_out_name),
                                                    f'{self.vd_name}_stroke_debug.png')
                                 cv2.imwrite(dbg, ov)
-                                print(f'[Stroke] Wrote stroke-mask debug image: {dbg}')
+                                print(f'[Mask] Wrote mask overlay ({config.MASK_MODE}): {dbg}')
                                 colab_autodownload(dbg)
                             except Exception as e:
-                                print(f'[Stroke] (debug overlay skipped: {e})')
+                                print(f'[Mask] (debug overlay skipped: {e})')
                             self._stroke_debug_saved = True
 
                     # Temporal stabilisation: OR each frame's mask with its
