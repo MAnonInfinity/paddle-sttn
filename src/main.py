@@ -1353,7 +1353,31 @@ class SubtitleRemover:
                                 region[fill_here] = np.nan_to_num(filled)[fill_here].astype(np.uint8)
                                 leftover = mi & ~valid
                             else:
+                                fill_here = np.zeros_like(mi)
                                 leftover = mi
+
+                            # Debug: on the first real text frame, show flow-filled
+                            # (green) vs LaMa-fallback (red) pixels + the flow-fill
+                            # ratio. Mostly green = flicker-free; lots of red =
+                            # flow couldn't recover -> expect residual flicker there.
+                            if (not getattr(self, '_flowfill_debug_saved', False)
+                                    and int(mi.sum()) > 200):
+                                try:
+                                    ov = frames_batch[i].copy()
+                                    ovr = ov[sy0:sy1, :]
+                                    ovr[fill_here] = (0, 255, 0)
+                                    ovr[leftover] = (0, 0, 255)
+                                    ratio = 100.0 * float(fill_here.sum()) / float(mi.sum())
+                                    dbg = os.path.join(os.path.dirname(self.video_out_name),
+                                                       f'{self.vd_name}_flowfill_debug.png')
+                                    cv2.imwrite(dbg, ov)
+                                    print(f'[flowfill] {ratio:.0f}% flow-filled (green), '
+                                          f'{100 - ratio:.0f}% LaMa (red). Debug: {dbg}')
+                                    colab_autodownload(dbg)
+                                except Exception as e:
+                                    print(f'[flowfill] (debug overlay skipped: {e})')
+                                self._flowfill_debug_saved = True
+
                             if leftover.any():
                                 if self.lama_inpaint is None:
                                     self.lama_inpaint = LamaInpaint()
