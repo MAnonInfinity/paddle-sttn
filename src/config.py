@@ -241,9 +241,10 @@ STROKE_DILATE_PIXELS = 1
 # Pad each OCR box by this many pixels before stroke detection, so outline
 # pixels just outside the text bbox are still covered.
 STROKE_BOX_PAD = 4
-# Fill-ratio guard: if the stroke mask covers more than this fraction of a text
-# box, treat it as texture over-catch (not real text) and drop it. Real subtitle
-# text is sparse inside its box; busy backgrounds fill it.
-STROKE_MAX_FILL_FRAC = 0.45
+# Fill-ratio guard: drop a box's mask only if it covers more than this fraction
+# of the box — a near-solid mask = texture over-catch. Kept HIGH so dense 2-line
+# subtitles (which legitimately fill much of a tight box) are NOT dropped; the
+# outline-adjacency test is the primary texture rejector.
+STROKE_MAX_FILL_FRAC = 0.85
 # ********** Stroke-level mask settings end **********
 # ******************** [MODIFIABLE] end ********************
