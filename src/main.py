@@ -959,19 +959,24 @@ class SubtitleRemover:
         """
         if sigma is None:
             sigma = config.COLOR_CORRECT_SIGMA
-        reg = out[sy0:sy1].astype(np.float32)
         sm = mask_full[sy0:sy1] > 0
         if not sm.any():
             return
+        # Work in LAB: luminance (L) separate from colour (a,b). Replace the fill's
+        # colour with the surrounding background colour entirely (kills tint), and
+        # low-freq-match its luminance (fixes brightness band) while keeping its
+        # detail. Far more robust to colour casts than a BGR shift.
+        lab = cv2.cvtColor(out[sy0:sy1], cv2.COLOR_BGR2LAB).astype(np.float32)
         weight = (~sm).astype(np.float32)               # 1 on real background
         wb = cv2.GaussianBlur(weight, (0, 0), sigma) + 1e-6
-        local_bg = np.empty_like(reg)
-        for c in range(3):
-            local_bg[..., c] = cv2.GaussianBlur(reg[..., c] * weight, (0, 0), sigma) / wb
-        filled_blur = cv2.GaussianBlur(reg, (0, 0), sigma)
-        corr = local_bg - filled_blur                   # low-freq colour offset
-        reg[sm] = np.clip(reg[sm] + corr[sm], 0, 255)
-        out[sy0:sy1] = reg.astype(np.uint8)
+        for ch in range(3):
+            chan = lab[..., ch]
+            local_bg = cv2.GaussianBlur(chan * weight, (0, 0), sigma) / wb
+            if ch == 0:  # L: low-freq shift, preserve fill detail
+                chan[sm] = np.clip(chan[sm] + (local_bg - cv2.GaussianBlur(chan, (0, 0), sigma))[sm], 0, 255)
+            else:        # a, b: take the surrounding colour outright
+                chan[sm] = np.clip(local_bg[sm], 0, 255)
+        out[sy0:sy1] = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     @staticmethod
     def estimate_affine(gray_from, gray_to, ignore_mask=None):
