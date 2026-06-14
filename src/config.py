@@ -239,9 +239,13 @@ STROKE_BLOCK_SIZE = 25
 # A pixel is a stroke if it is at least this much brighter OR darker (0-255)
 # than its local neighbourhood mean. Lower to catch fainter text.
 STROKE_LOCAL_C = 10
-# Grow the stroke mask by this many pixels to bridge core+outline into a solid
-# glyph and cover anti-aliased edges.
-STROKE_DILATE_PIXELS = 1
+# How far (px) the dark outline of white text extends from the bright core. The
+# dark ring within this reach of a bright core is masked; set high enough to
+# cover the full outline or a dark letter-ghost remains.
+STROKE_OUTLINE_REACH = 5
+# Grow the final stroke mask by this many pixels to cover anti-aliased edges and
+# any residual outline.
+STROKE_DILATE_PIXELS = 2
 # Pad each OCR box by this many pixels before stroke detection, so outline
 # pixels just outside the text bbox are still covered.
 STROKE_BOX_PAD = 4

@@ -918,10 +918,11 @@ class SubtitleRemover:
             dark = cv2.adaptiveThreshold(
                 gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block, C)
             # Keep only the dark pixels that ring a bright core (the outline of
-            # white text), not standalone dark texture/shadows. This is what
-            # rejects busy backgrounds (blankets, foliage) that otherwise make the
-            # mask a solid blob.
-            dark_outline = cv2.bitwise_and(dark, cv2.dilate(bright, kernel, iterations=2))
+            # white text), not standalone dark texture/shadows. The reach must
+            # cover the full outline thickness or a dark letter-outline ghost is
+            # left behind; too large re-catches texture.
+            dark_outline = cv2.bitwise_and(
+                dark, cv2.dilate(bright, kernel, iterations=config.STROKE_OUTLINE_REACH))
             m = cv2.bitwise_or(bright, dark_outline)
             m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel, iterations=1)
             if config.STROKE_DILATE_PIXELS > 0:
