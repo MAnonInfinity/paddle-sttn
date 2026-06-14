@@ -55,8 +55,33 @@ import time
 from tqdm import tqdm
 
 # --- CONFIGURATION ---
-VIDEO_PATH = "videos/9.mp4"
+VIDEOS_DIR = "videos"
+VIDEO_PATH = "videos/9.mp4"   # fallback when no video is chosen (see below)
 OUTPUT_VIDEO = "output.mp4"
+
+# Choose which video in videos/ to process from a Colab cell, e.g.:
+#   import os; os.environ['VIDEO'] = '3.mp4'   (or just '3')
+# before running main.py. If unset/missing, falls back to VIDEO_PATH above.
+
+
+def resolve_input_video(fallback=VIDEO_PATH):
+    """Pick the video named by the VIDEO env var inside videos/; else fallback."""
+    name = os.environ.get('VIDEO', '').strip()
+    if not name:
+        print(f'[Input] No VIDEO set; using default {fallback}')
+        return fallback
+
+    # Accept a bare name ('3' / '3.mp4'), a videos/-relative name, or a full path.
+    candidates = [name, os.path.join(VIDEOS_DIR, name)]
+    if '.' not in os.path.basename(name):
+        candidates.append(os.path.join(VIDEOS_DIR, name + '.mp4'))
+    for path in candidates:
+        if os.path.isfile(path):
+            print(f'[Input] Using VIDEO={name!r} -> {path}')
+            return path
+
+    print(f'[Input] VIDEO={name!r} not found in {VIDEOS_DIR}/; falling back to {fallback}')
+    return fallback
 
 # OCR language for subtitle detection.
 # 'ch'  = Chinese + English (default, works for CJK videos)
@@ -1534,8 +1559,9 @@ class SubtitleRemover:
 if __name__ == '__main__':
     multiprocessing.set_start_method("spawn")
 
-    if is_video_or_image(VIDEO_PATH):
-        sd = SubtitleRemover(VIDEO_PATH, sub_area=SUB_AREA, video_out_name=OUTPUT_VIDEO)
+    video_path = resolve_input_video()
+    if is_video_or_image(video_path) and os.path.isfile(video_path):
+        sd = SubtitleRemover(video_path, sub_area=SUB_AREA, video_out_name=OUTPUT_VIDEO)
         sd.run()
     else:
-        print(f'Invalid video path: {VIDEO_PATH}')
+        print(f'Invalid video path: {video_path}')
