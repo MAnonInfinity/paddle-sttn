@@ -908,6 +908,12 @@ class SubtitleRemover:
             # White core: brighter than local neighbourhood.
             bright = cv2.adaptiveThreshold(
                 gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, block, -C)
+            # ...AND among the brightest pixels in the box. White subtitle text is
+            # the brightest thing in its box; mid-bright textured backgrounds
+            # (knit blankets, foliage) are not — this rejects their over-catch.
+            # Scene-adaptive via a percentile so dim-but-bright text still passes.
+            thr = np.percentile(gray, config.STROKE_BRIGHT_PCTL)
+            bright = cv2.bitwise_and(bright, (gray >= thr).astype(np.uint8) * 255)
             # Dark outline: darker than local neighbourhood.
             dark = cv2.adaptiveThreshold(
                 gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block, C)

@@ -206,7 +206,7 @@ PLATE_STD_THRESH = 9
 # Colour-correct the inpainted region to match surrounding background (fixes the
 # faint colour/tint cast where the fill doesn't match its surroundings).
 STROKE_COLOR_CORRECT = True
-COLOR_CORRECT_SIGMA = 15
+COLOR_CORRECT_SIGMA = 25
 # 'plate' processes a whole scene at once (capped here) so the subtitle text
 # changes within the window and most band pixels get revealed. Holds this many
 # frames in RAM at once; lower if memory is tight on very long scenes.
@@ -250,5 +250,9 @@ STROKE_BOX_PAD = 4
 # subtitles (which legitimately fill much of a tight box) are NOT dropped; the
 # outline-adjacency test is the primary texture rejector.
 STROKE_MAX_FILL_FRAC = 0.85
+# White text is among the brightest pixels in its box; require the bright-core to
+# be at/above this percentile of box brightness. Rejects mid-bright textured
+# backgrounds (knit, foliage). Lower to catch dimmer text; raise to be stricter.
+STROKE_BRIGHT_PCTL = 80
 # ********** Stroke-level mask settings end **********
 # ******************** [MODIFIABLE] end ********************
