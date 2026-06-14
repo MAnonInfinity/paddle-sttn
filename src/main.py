@@ -1484,37 +1484,51 @@ class SubtitleRemover:
         # -c:a aac  = re-encode audio to AAC (works for any input codec: mp3, ac3, pcm...).
         # -c:v copy = keep processed video as-is (no re-encoding overhead) UNLESS h264 needed.
         use_shell = True if os.name == 'nt' else False
-        cmd = [
-            config.FFMPEG_PATH, '-y',
-            '-i', self.video_temp_file.name,  # processed video (no audio)
-            '-i', self.video_path,             # original video (audio source)
-            '-map', '0:v:0',                   # video from processed
-            '-map', '1:a?',                    # audio from original (optional)
-            '-c:v', 'libx264' if config.USE_H264 else 'copy',
-            '-c:a', 'aac',
-            '-loglevel', 'warning',
-            self.video_out_name,
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True,
-                                    stdin=open(os.devnull), shell=use_shell)
-            if result.returncode != 0:
-                print(f'[Warning] ffmpeg audio merge failed (exit {result.returncode}):')
-                print(result.stderr[:800])
-                shutil.copy2(self.video_temp_file.name, self.video_out_name)
-            else:
+
+        # Try the bundled ffmpeg first, then the system ffmpeg. The bundled
+        # binary can SIGSEGV (exit -11) on some hosts (e.g. Colab); the system
+        # one usually works, so fall back to it instead of shipping silent video.
+        candidates = []
+        for p in (config.FFMPEG_PATH, shutil.which('ffmpeg')):
+            if p and p not in candidates:
+                candidates.append(p)
+
+        def _cmd(ffmpeg):
+            return [
+                ffmpeg, '-y',
+                '-i', self.video_temp_file.name,  # processed video (no audio)
+                '-i', self.video_path,             # original video (audio source)
+                '-map', '0:v:0',                   # video from processed
+                '-map', '1:a?',                    # audio from original (optional)
+                '-c:v', 'libx264' if config.USE_H264 else 'copy',
+                '-c:a', 'aac',
+                '-loglevel', 'warning',
+                self.video_out_name,
+            ]
+
+        for ffmpeg in candidates:
+            try:
+                result = subprocess.run(_cmd(ffmpeg), capture_output=True, text=True,
+                                        stdin=open(os.devnull), shell=use_shell)
+            except Exception as e:
+                print(f'[Warning] could not run ffmpeg at {ffmpeg}: {e}')
+                continue
+            if result.returncode == 0:
                 if result.stderr.strip():
                     print(f'[ffmpeg] {result.stderr.strip()[:400]}')
                 self.is_successful_merged = True
-                print('[Info] Audio merged successfully.')
-        except Exception as e:
-            print(f'[Error] Could not run ffmpeg: {e}')
+                print(f'[Info] Audio merged successfully (ffmpeg: {ffmpeg}).')
+                break
+            print(f'[Warning] ffmpeg audio merge failed (exit {result.returncode}) using {ffmpeg}:')
+            print((result.stderr or '')[:800])
+        else:
+            print('[Warning] all ffmpeg candidates failed — writing video without audio.')
             try:
                 shutil.copy2(self.video_temp_file.name, self.video_out_name)
             except IOError as ie:
                 print(f'[Error] Unable to copy processed video: {ie}')
-        finally:
-            self.video_temp_file.close()
+
+        self.video_temp_file.close()
 
 
 if __name__ == '__main__':
